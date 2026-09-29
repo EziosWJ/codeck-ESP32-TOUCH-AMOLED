@@ -1,0 +1,16 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "input/lvgl_touch_input.c"
+        "ui/demo_ui.c"
+    INCLUDE_DIRS
+        "."
+        "input/include"
+        "ui/include"
+    REQUIRES
+        amoled_display
+        board_support
+        esp_lvgl_port
+        ft3168
+        lvgl
+)
