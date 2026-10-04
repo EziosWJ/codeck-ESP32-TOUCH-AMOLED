@@ -1,9 +1,9 @@
 # Generate the small LVGL 4 bpp font used by the home face on Windows.
-# Only characters visible in the static mock UI are included.
+# Characters used by live quota labels, periods and countdowns.
 Add-Type -AssemblyName System.Drawing
 # Code points keep this script independent of Windows PowerShell's script encoding.
-$characters = @(0x0020, 0x0030, 0x0031, 0x0032, 0x0033, 0x0034, 0x0035,
-    0x0036, 0x003a, 0x0048, 0x5206, 0x5c0f, 0x5ea6, 0x65f6, 0x6709,
+$characters = @(0x0020, 0x002d, 0x0030, 0x0031, 0x0032, 0x0033, 0x0034, 0x0035,
+    0x0036, 0x0037, 0x0038, 0x0039, 0x003a, 0x0048, 0x004d, 0x5206, 0x5c0f, 0x5ea6, 0x65f6, 0x6709,
     0x7f6e, 0x8fd8, 0x91cd, 0x989d) | ForEach-Object { [char]$_ }
 $font = [System.Drawing.Font]::new('Microsoft YaHei', 20, [System.Drawing.FontStyle]::Regular,
     [System.Drawing.GraphicsUnit]::Pixel)

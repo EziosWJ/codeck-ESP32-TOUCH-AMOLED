@@ -4,6 +4,7 @@
 #include "ft3168.h"
 #include "esp_lvgl_port.h"
 #include "lvgl_touch_input.h"
+#include "account_client.h"
 
 #include "esp_log.h"
 
@@ -54,4 +55,8 @@ void app_main(void)
 
     lvgl_port_unlock();
     ESP_LOGI(TAG, "AMOLED home UI ready");
+    err = account_client_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Account client startup failed: %s", esp_err_to_name(err));
+    }
 }

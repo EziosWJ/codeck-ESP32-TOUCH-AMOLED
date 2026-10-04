@@ -1,11 +1,14 @@
 idf_component_register(
     SRCS
         "app_main.c"
+        "network/account_client.c"
+        "network/quota_data.c"
         "input/lvgl_touch_input.c"
         "ui/ui_home.c"
         "ui/font/ui_home_zh_20.c"
     INCLUDE_DIRS
         "."
+        "network/include"
         "input/include"
         "ui/include"
     REQUIRES
@@ -14,4 +17,10 @@ idf_component_register(
         esp_lvgl_port
         ft3168
         lvgl
+        esp_wifi
+        esp_netif
+        esp_event
+        esp_http_client
+        nvs_flash
+        espressif__cjson
 )

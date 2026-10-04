@@ -1,0 +1,2 @@
+#pragma once
+#define CONFIG_ESP_HTTP_CLIENT_ENABLE_BASIC_AUTH 1
