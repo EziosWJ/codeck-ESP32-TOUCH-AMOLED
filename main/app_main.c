@@ -1,6 +1,6 @@
 #include "board_i2c.h"
 #include "amoled_display.h"
-#include "demo_ui.h"
+#include "ui_home.h"
 #include "ft3168.h"
 #include "esp_lvgl_port.h"
 #include "lvgl_touch_input.h"
@@ -45,13 +45,13 @@ void app_main(void)
         }
     }
 
-    err = demo_ui_init(display);
+    err = ui_home_init(display);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Demo UI initialization failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Home UI initialization failed: %s", esp_err_to_name(err));
         lvgl_port_unlock();
         return;
     }
 
     lvgl_port_unlock();
-    ESP_LOGI(TAG, "Application ready: vertical scrolling and horizontal page flips enabled");
+    ESP_LOGI(TAG, "AMOLED home UI ready");
 }

@@ -2,7 +2,8 @@ idf_component_register(
     SRCS
         "app_main.c"
         "input/lvgl_touch_input.c"
-        "ui/demo_ui.c"
+        "ui/ui_home.c"
+        "ui/font/ui_home_zh_20.c"
     INCLUDE_DIRS
         "."
         "input/include"
