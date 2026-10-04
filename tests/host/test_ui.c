@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <string.h>
+#include <math.h>
 
 static lv_indev_data_t pointer;
 static uint32_t flushed_pixels;
@@ -95,6 +96,7 @@ static void flush(lv_display_t *display, const lv_area_t *area, uint8_t *pixels)
 static void snapshot(lv_obj_t *screen, const char *filename)
 {
     lv_obj_update_layout(screen);
+    if (getenv("CODECK_UI_HEAP_BYTES")) return;
     lv_draw_buf_t *image = lv_snapshot_take(screen, LV_COLOR_FORMAT_RGB888);
     assert(image);
     FILE *file = fopen(filename, "wb");
@@ -111,11 +113,32 @@ static void snapshot(lv_obj_t *screen, const char *filename)
     lv_draw_buf_destroy(image);
 }
 
+static unsigned actions;
+static network_action_t last_action;
+static void capture_action(network_action_t action, void *context)
+{
+    assert(context == (void *)42);
+    actions++;
+    last_action = action;
+}
+
 int main(void)
 {
     setenv("TZ", "CST-8", 1);
     tzset();
     lv_init();
+    void *heap_reservation = NULL;
+    size_t reserved_size = 0;
+    const char *heap_bytes = getenv("CODECK_UI_HEAP_BYTES");
+    if (heap_bytes) {
+        lv_mem_monitor_t available;
+        lv_mem_monitor(&available);
+        size_t budget = strtoul(heap_bytes, NULL, 10);
+        assert(budget >= 65536 && budget < available.free_size);
+        reserved_size = available.free_size - budget - 32;
+        heap_reservation = lv_malloc(reserved_size);
+        assert(heap_reservation);
+    }
     lv_display_t *display = lv_display_create(466, 466);
     assert(display);
     static uint8_t draw_buffer[466 * 32 * 2];
@@ -131,6 +154,10 @@ int main(void)
     lv_obj_t *home = lv_obj_get_child(screen, 0);
     lv_obj_t *network_page = lv_obj_get_child(screen, 1);
     uint32_t objects = count_objects(screen);
+    lv_mem_monitor_t memory;
+    lv_mem_monitor(&memory);
+    printf("Five-page controls use %zu bytes of LVGL memory\n", memory.total_size - memory.free_size - reserved_size);
+    fflush(stdout);
     snapshot(screen, "ui_waiting.ppm");
     quota_view_t view = {.has_quota = true, .online = true, .time_synced = true,
         .now = 1791117315, .quota = {95, 300, 1791120915}};
@@ -201,6 +228,137 @@ int main(void)
     stroke((lv_point_t){233, 418}, (lv_point_t){233, 418}, 40);
     assert_active(home, network_page);
 
+    /* Five pages, non-wrapping boundaries, and modal taps share the input layer. */
+    lv_obj_t *settings = lv_obj_get_child(screen, 2);
+    lv_obj_t *quota_details = lv_obj_get_child(screen, 3);
+    lv_obj_t *cost_page = lv_obj_get_child(screen, 4);
+    provision_view_t provision = {.configured = true};
+    strcpy(provision.message, "配置已保存，可重新配网");
+    ui_home_set_network_action(capture_action, (void *)42);
+    ui_home_update_provision(&provision);
+    swipe(90, 360);
+    assert_active(home, settings);
+    swipe(360, 90); swipe(360, 90);
+    assert_active(settings, network_page);
+    swipe(360, 90);
+    assert_active(quota_details, settings);
+    assert(has_text(quota_details, "等待数据"));
+    snapshot(screen, "ui_quota_details_missing_weekly.ppm");
+    view.has_weekly_quota = true;
+    view.online = true;
+    view.now = 1791167040;
+    view.quota = (quota_data_t){78, 300, view.now + 9360};
+    view.weekly_quota = (quota_data_t){62, 10080, view.now + 3 * 86400};
+    ui_home_update(&view);
+    assert(has_text(quota_details, "78"));
+    assert(has_text(quota_details, "62"));
+    assert(has_text(quota_details, "还有 2小时36分"));
+    assert(has_text(quota_details, "剩余 3天"));
+    snapshot(screen, "ui_quota_details.ppm");
+    advance(100);
+    flushed_pixels = 0;
+    ui_home_update(&view);
+    advance(100);
+    assert(flushed_pixels == 0);
+    view.quota.remaining_percent = 0;
+    view.weekly_quota.remaining_percent = 100;
+    ui_home_update(&view);
+    snapshot(screen, "ui_quota_details_extremes.ppm");
+    view.time_synced = false;
+    ui_home_update(&view);
+    assert(has_text(quota_details, "时间未同步"));
+    snapshot(screen, "ui_quota_details_unsynced.ppm");
+    view.time_synced = true;
+    view.quota.remaining_percent = 78;
+    view.weekly_quota.remaining_percent = 62;
+    ui_home_update(&view);
+    swipe(360, 90);
+    assert_active(cost_page, quota_details);
+    assert(has_text(cost_page, "$--"));
+    snapshot(screen, "ui_cost_waiting.ppm");
+    ui_cost_view_t cost = {
+        .has_cost = true, .has_comparison = true, .has_hourly = true,
+        .has_tokens = true, .has_unpriced_tokens = true, .has_conversations = true,
+        .today_cost_usd = .42, .yesterday_change_percent = -32,
+        .total_tokens = 12400000, .unpriced_tokens = 320000, .conversation_count = 1842,
+        .hourly_cost_usd = {8, 16, 18, 10, 14, 24, 36, 51, 60, 36, 14, 22,
+                            33, 50, 72, 59, 38, 31, 17, 25, 12, 7, 5, 4},
+    };
+    ui_home_update_cost(&cost);
+    assert(has_text(cost_page, "$0.42"));
+    assert(has_text(cost_page, "-32%"));
+    assert(has_text(cost_page, "12.4M"));
+    assert(has_text(cost_page, "320K"));
+    assert(has_text(cost_page, "1,842"));
+    snapshot(screen, "ui_cost.ppm");
+    advance(100);
+    flushed_pixels = 0;
+    ui_home_update_cost(&cost);
+    advance(100);
+    assert(flushed_pixels == 0);
+    swipe(360, 90);
+    assert_active(cost_page, home);
+    cost.yesterday_change_percent = 12;
+    ui_home_update_cost(&cost);
+    snapshot(screen, "ui_cost_increase.ppm");
+    cost = (ui_cost_view_t){.has_cost = true, .has_comparison = true, .has_hourly = true,
+                          .today_cost_usd = NAN, .yesterday_change_percent = INFINITY};
+    cost.hourly_cost_usd[0] = NAN;
+    cost.hourly_cost_usd[1] = -1;
+    ui_home_update_cost(&cost);
+    assert(has_text(cost_page, "$--"));
+    snapshot(screen, "ui_cost_invalid.ppm");
+    cost = (ui_cost_view_t){.has_cost = true, .has_comparison = true, .has_hourly = true,
+                          .has_tokens = true, .has_unpriced_tokens = true, .has_conversations = true};
+    ui_home_update_cost(&cost);
+    assert(has_text(cost_page, "$0.00"));
+    assert(has_text(cost_page, "0"));
+    snapshot(screen, "ui_cost_zero.ppm");
+    ui_home_update_cost(&(ui_cost_view_t){0});
+    swipe(90, 360); swipe(90, 360);
+    assert_active(settings, cost_page);
+    assert(has_text(settings, "重新配网"));
+    snapshot(screen, "ui_settings_idle.ppm");
+    stroke((lv_point_t){233, 374}, (lv_point_t){233, 374}, 40);
+    assert(actions == 0);
+    snapshot(screen, "ui_settings_confirm.ppm");
+    stroke((lv_point_t){233, 318}, (lv_point_t){233, 318}, 40);
+    assert(actions == 0);
+    stroke((lv_point_t){233, 374}, (lv_point_t){233, 374}, 40);
+    stroke((lv_point_t){233, 268}, (lv_point_t){233, 268}, 40);
+    assert(actions == 1 && last_action == NETWORK_PROVISION_START);
+    provision.active = true;
+    provision.phase = PROVISION_WAITING;
+    strcpy(provision.ap_ssid, "Codeck-1234");strcpy(provision.ap_password, "a1b2c3d4e5f6");
+    strcpy(provision.message, "手机连接热点后打开配网页面");
+    ui_home_update_provision(&provision);
+    assert(has_text(settings, "热点: Codeck-1234"));
+    snapshot(screen, "ui_settings_waiting.ppm");
+    stroke((lv_point_t){233, 418}, (lv_point_t){233, 418}, 40);
+    assert(actions == 2 && last_action == NETWORK_PROVISION_CANCEL);
+    provision.phase = PROVISION_CONNECTING;
+    strcpy(provision.message, "正在连接 Wi-Fi，请稍候");ui_home_update_provision(&provision);
+    snapshot(screen, "ui_settings_connecting.ppm");
+    provision.phase = PROVISION_SAVED;provision.saved = true;
+    strcpy(provision.message, "联网成功，API HTTP 401");ui_home_update_provision(&provision);
+    snapshot(screen, "ui_settings_api_error.ppm");
+    stroke((lv_point_t){233, 374}, (lv_point_t){233, 374}, 40);
+    assert(actions == 3 && last_action == NETWORK_PROVISION_FINISH);
+    provision.closing = true;provision.phase = PROVISION_STOPPING;
+    strcpy(provision.message, "正在关闭热点");ui_home_update_provision(&provision);
+    stroke((lv_point_t){233, 374}, (lv_point_t){233, 374}, 40);
+    stroke((lv_point_t){233, 418}, (lv_point_t){233, 418}, 40);
+    assert(actions == 3);
+    snapshot(screen, "ui_settings_stopping.ppm");
+    provision.closing = false;
+    provision.phase = PROVISION_FAILED;provision.saved = false;
+    strcpy(provision.message, "连接超时，请检查密码和网络");ui_home_update_provision(&provision);
+    snapshot(screen, "ui_settings_failed.ppm");
+    char safe_ssid[97];ui_home_format_ssid("Wi-Fi \xf0\x9f\x8c\x9f", safe_ssid, sizeof(safe_ssid));
+    assert(!strcmp(safe_ssid, "Wi-Fi ?"));
+    swipe(90, 360);swipe(90, 360);
+    assert_active(home, settings);
+
     /* Exercise the production touch adapter with brief losses and read errors. */
     lv_indev_delete(indev);
     assert(lvgl_touch_input_register(display, (ft3168_handle_t)1) == ESP_OK);
@@ -236,9 +394,28 @@ int main(void)
         view.now++;
         ui_home_update(&view);
         ui_home_update_network(&network);
+        cost.today_cost_usd = i / 100.0;
+        cost.hourly_cost_usd[i % 24] = i / 100.0;
+        ui_home_update_cost(&cost);
         assert(count_objects(screen) == objects);
     }
+    /* A clean first boot automatically selects page three only once. */
+    assert(ui_home_init(display) == ESP_OK);
+    settings = lv_obj_get_child(screen, 2);home = lv_obj_get_child(screen, 0);
+    provision = (provision_view_t){.active=true,.phase=PROVISION_WAITING};
+    strcpy(provision.ap_ssid,"Codeck-1234");strcpy(provision.ap_password,"a1b2c3d4e5f6");
+    strcpy(provision.message,"手机连接热点后打开配网页面");
+    ui_home_update_provision(&provision);
+    assert_active(settings,home);
+    snapshot(screen,"ui_settings_first_boot.ppm");
+    provision = (provision_view_t){.phase=PROVISION_FAILED};
+    strcpy(provision.message,"网络启动失败，请重启设备");
+    ui_home_update_provision(&provision);
+    snapshot(screen,"ui_settings_startup_error.ppm");
     lv_display_delete(display);
+    lv_mem_monitor(&memory);
+    printf("LVGL peak memory including rendering: %zu bytes\n", memory.max_used - reserved_size);
+    lv_free(heap_reservation);
     lv_deinit();
     puts("UI snapshots and 1000 updates without recreating controls passed");
     return 0;

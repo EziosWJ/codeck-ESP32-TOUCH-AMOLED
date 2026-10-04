@@ -78,3 +78,6 @@ main/config.local.h
 *.workspace # General workspace files, can be from various tools
 *.suo       # Visual Studio Solution User Options
 *.sln.docstates # Visual Studio
+
+# Local Git worktrees
+.worktrees/

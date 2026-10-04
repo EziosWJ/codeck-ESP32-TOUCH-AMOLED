@@ -13,8 +13,17 @@ static lv_obj_t *reset_label, *countdown_label;
 static lv_obj_t *quota_segments[5], *quota_glow, *quota_highlight;
 static lv_obj_t *network_status_label, *ssid_label, *ip_label, *signal_label;
 static lv_obj_t *service_label, *sync_label;
-static lv_obj_t *home_page, *network_page, *page_dots[2];
-static bool home_active, swipe_tracking;
+#define PAGE_COUNT 5
+static lv_obj_t *home_page, *network_page, *settings_page, *quota_page, *cost_page;
+static lv_obj_t *page_dots[PAGE_COUNT];
+static lv_obj_t *settings_status, *ap_name_label, *ap_password_label, *ap_url_label;
+static lv_obj_t *settings_message, *primary_button, *primary_label, *cancel_button;
+static lv_obj_t *confirm_panel;
+static unsigned active_page;
+static bool swipe_tracking, provision_seen, confirming;
+static provision_view_t provision_view;
+static ui_network_action_cb_t network_action_cb;
+static void *network_action_context;
 static lv_point_t swipe_start;
 static int last_percent;
 
@@ -140,48 +149,73 @@ static lv_obj_t *make_network_label(lv_obj_t *parent, const char *text, int32_t 
     return label;
 }
 
-static void show_page(bool show_home)
+static void show_page(unsigned page)
 {
-    if (home_active == show_home) return;
-    home_active = show_home;
-    lv_obj_add_flag(show_home ? network_page : home_page, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(show_home ? home_page : network_page, LV_OBJ_FLAG_HIDDEN);
-    for (unsigned i = 0; i < 2; i++) {
-        lv_obj_set_style_bg_color(page_dots[i],
-            lv_color_hex((i == 0) == home_active ? COLOR_CYAN : 0x354458), 0);
+    if (active_page == page || page >= PAGE_COUNT) return;
+    active_page = page;
+    lv_obj_t *pages[] = {home_page, network_page, settings_page, quota_page, cost_page};
+    for (unsigned i = 0; i < PAGE_COUNT; i++) {
+        if (i == page) lv_obj_remove_flag(pages[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(pages[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_bg_color(page_dots[i], lv_color_hex(i == page ? COLOR_CYAN : 0x354458), 0);
     }
 }
 
-/* Recognize the displacement while the finger is still down. Latch each
- * gesture so continuing the same touch cannot switch back a second time. */
+static bool inside(lv_point_t p, int x, int y, int w, int h)
+{
+    return p.x >= x && p.x < x + w && p.y >= y && p.y < y + h;
+}
+
+static void request_action(network_action_t action)
+{
+    if (network_action_cb) network_action_cb(action, network_action_context);
+}
+
+/* The transparent input layer handles taps and swipes together. A latched
+ * swipe never becomes a button tap, even if the finger reverses direction. */
 static void swipe_event(lv_event_t *event)
 {
     lv_event_code_t code = lv_event_get_code(event);
-    if (code != LV_EVENT_PRESSED && code != LV_EVENT_PRESSING && code != LV_EVENT_PRESS_LOST &&
-        code != LV_EVENT_RELEASED) return;
+    if (code != LV_EVENT_PRESSED && code != LV_EVENT_PRESSING && code != LV_EVENT_PRESS_LOST && code != LV_EVENT_RELEASED) return;
     lv_indev_t *indev = lv_event_get_indev(event);
     if (!indev) return;
     if (code == LV_EVENT_PRESSED) {
         lv_indev_get_point(indev, &swipe_start);
         swipe_tracking = true;
-    } else if (code == LV_EVENT_PRESS_LOST) {
-        swipe_tracking = false;
-    } else if ((code == LV_EVENT_PRESSING || code == LV_EVENT_RELEASED) && swipe_tracking) {
+    } else if (code == LV_EVENT_PRESS_LOST) swipe_tracking = false;
+    else if (swipe_tracking) {
         lv_point_t end;
         lv_indev_get_point(indev, &end);
-        int32_t dx = end.x - swipe_start.x;
-        int32_t dy = end.y - swipe_start.y;
-        if (abs(dx) >= SWIPE_DISTANCE && abs(dx) > abs(dy) &&
-            ((home_active && dx < 0) || (!home_active && dx > 0))) {
+        int dx = end.x - swipe_start.x, dy = end.y - swipe_start.y;
+        if (!confirming && abs(dx) >= SWIPE_DISTANCE && abs(dx) > abs(dy) &&
+            ((dx < 0 && active_page + 1 < PAGE_COUNT) || (dx > 0 && active_page > 0))) {
             swipe_tracking = false;
-            show_page(!home_active);
+            show_page(dx < 0 ? active_page + 1 : active_page - 1);
         } else if (code == LV_EVENT_RELEASED) {
             swipe_tracking = false;
-            if (!home_active && abs(dx) < 12 && abs(dy) < 12 &&
-                swipe_start.x >= RETURN_X && swipe_start.x < RETURN_X + RETURN_WIDTH &&
-                swipe_start.y >= RETURN_Y && swipe_start.y < RETURN_Y + RETURN_HEIGHT &&
-                end.x >= RETURN_X && end.x < RETURN_X + RETURN_WIDTH &&
-                end.y >= RETURN_Y && end.y < RETURN_Y + RETURN_HEIGHT) show_page(true);
+            if (abs(dx) >= 12 || abs(dy) >= 12) return;
+            if (active_page == 1 && inside(swipe_start, RETURN_X, RETURN_Y, RETURN_WIDTH, RETURN_HEIGHT) &&
+                inside(end, RETURN_X, RETURN_Y, RETURN_WIDTH, RETURN_HEIGHT)) show_page(0);
+            else if (active_page == 2) {
+                if (confirming) {
+                    if (inside(swipe_start, 113, 248, 240, 40) && inside(end, 113, 248, 240, 40)) {
+                        confirming = false;
+                        lv_obj_add_flag(confirm_panel, LV_OBJ_FLAG_HIDDEN);
+                        request_action(NETWORK_PROVISION_START);
+                    } else if (inside(swipe_start, 113, 298, 240, 40) && inside(end, 113, 298, 240, 40)) {
+                        confirming = false;
+                        lv_obj_add_flag(confirm_panel, LV_OBJ_FLAG_HIDDEN);
+                    }
+                } else if (inside(swipe_start, 113, 354, 240, 40) && inside(end, 113, 354, 240, 40) &&
+                           !lv_obj_has_flag(primary_button, LV_OBJ_FLAG_HIDDEN)) {
+                    if (provision_view.active) request_action(NETWORK_PROVISION_FINISH);
+                    else {
+                        confirming = true;
+                        lv_obj_remove_flag(confirm_panel, LV_OBJ_FLAG_HIDDEN);
+                    }
+                } else if (provision_view.active && !provision_view.closing && inside(swipe_start, 157, 400, 152, 36) &&
+                           inside(end, 157, 400, 152, 36)) request_action(NETWORK_PROVISION_CANCEL);
+            }
         }
     }
 }
@@ -219,6 +253,64 @@ static void make_network_page(lv_obj_t *page)
     lv_obj_center(label);
 }
 
+static lv_obj_t *make_button(lv_obj_t *parent, const char *text, int x, int y, int w, int h, lv_obj_t **out_label)
+{
+    lv_obj_t *button = lv_obj_create(parent);
+    lv_obj_remove_style_all(button);
+    lv_obj_set_pos(button, x, y);
+    lv_obj_set_size(button, w, h);
+    lv_obj_set_style_radius(button, 18, 0);
+    lv_obj_set_style_bg_color(button, lv_color_hex(0x102A3C), 0);
+    lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(button, lv_color_hex(0x26618A), 0);
+    lv_obj_set_style_border_width(button, 1, 0);
+    lv_obj_remove_flag(button, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *label = make_label(button, text, &ui_home_zh_20, COLOR_CYAN, 0, 0, 256);
+    lv_obj_center(label);
+    if (out_label) *out_label = label;
+    return button;
+}
+
+static void make_settings_page(lv_obj_t *page)
+{
+    make_network_label(page, "网络设置", 63, COLOR_CYAN);
+    settings_status = make_network_label(page, "未配置", 104, COLOR_SECONDARY);
+    ap_name_label = make_network_label(page, "手机网页配置 Wi-Fi 和 API", 153, COLOR_TEXT);
+    ap_password_label = make_network_label(page, "", 193, COLOR_TEXT);
+    ap_url_label = make_network_label(page, "", 233, COLOR_CYAN);
+    settings_message = make_network_label(page, "尚未配置，请开始配网", 277, COLOR_SECONDARY);
+    lv_label_set_long_mode(settings_message, LV_LABEL_LONG_WRAP);
+    lv_obj_set_height(settings_message, 65);
+    primary_button = make_button(page, "开始配网", 113, 354, 240, 40, &primary_label);
+    cancel_button = make_button(page, "取消配网", 157, 400, 152, 36, NULL);
+    lv_obj_add_flag(cancel_button, LV_OBJ_FLAG_HIDDEN);
+    confirm_panel = lv_obj_create(page);
+    lv_obj_remove_style_all(confirm_panel);
+    lv_obj_set_size(confirm_panel, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(confirm_panel, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(confirm_panel, LV_OPA_80, 0);
+    lv_obj_remove_flag(confirm_panel, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *dialog = lv_obj_create(confirm_panel);
+    lv_obj_remove_style_all(dialog);
+    lv_obj_set_pos(dialog, 80, 118);
+    lv_obj_set_size(dialog, 306, 236);
+    lv_obj_set_style_radius(dialog, 24, 0);
+    lv_obj_set_style_bg_color(dialog, lv_color_hex(0x102031), 0);
+    lv_obj_set_style_bg_opa(dialog, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(dialog, 1, 0);
+    lv_obj_set_style_border_color(dialog, lv_color_hex(COLOR_CYAN), 0);
+    lv_obj_remove_flag(dialog, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *title = make_label(dialog, "进入配网模式？", &ui_home_zh_20, COLOR_TEXT, 0, 22, 256);
+    lv_obj_set_width(title, 306);
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_t *hint = make_label(dialog, "手机连接设备热点\n填写 Wi-Fi 和 API", &ui_home_zh_20, COLOR_SECONDARY, 0, 64, 256);
+    lv_obj_set_width(hint, 306);
+    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+    make_button(dialog, "确认开启", 33, 130, 240, 40, NULL);
+    make_button(dialog, "返回", 33, 180, 240, 40, NULL);
+    lv_obj_add_flag(confirm_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
 esp_err_t ui_home_init(lv_display_t *display)
 {
     ESP_RETURN_ON_FALSE(display != NULL, ESP_ERR_INVALID_ARG, TAG, "display is NULL");
@@ -234,17 +326,33 @@ esp_err_t ui_home_init(lv_display_t *display)
 
     home_page = lv_obj_create(screen);
     network_page = lv_obj_create(screen);
+    settings_page = lv_obj_create(screen);
+    quota_page = lv_obj_create(screen);
+    cost_page = lv_obj_create(screen);
     prepare_page(home_page);
     prepare_page(network_page);
+    prepare_page(settings_page);
+    prepare_page(quota_page);
+    prepare_page(cost_page);
     lv_obj_set_pos(home_page, 0, 0);
     lv_obj_set_pos(network_page, 0, 0);
     lv_obj_add_flag(network_page, LV_OBJ_FLAG_HIDDEN);
-    home_active = true;
+    lv_obj_add_flag(settings_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(quota_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(cost_page, LV_OBJ_FLAG_HIDDEN);
+    active_page = 0;
+    confirming = provision_seen = false;
+    memset(&provision_view, 0, sizeof(provision_view));
+    network_action_cb = NULL;
     swipe_tracking = false;
     last_percent = -1;
     make_network_page(network_page);
-    page_dots[0] = make_dot(screen, 217, 444, 8, COLOR_CYAN);
-    page_dots[1] = make_dot(screen, 239, 444, 8, 0x354458);
+    make_settings_page(settings_page);
+    ui_dashboard_init(quota_page, cost_page);
+    for (unsigned i = 0; i < PAGE_COUNT; i++) {
+        page_dots[i] = make_dot(screen, 185 + (int)i * 22, 444, 8,
+                               i == 0 ? COLOR_CYAN : 0x354458);
+    }
 
     lv_obj_t *input = lv_obj_create(screen);
     lv_obj_remove_style_all(input);
@@ -274,6 +382,7 @@ esp_err_t ui_home_init(lv_display_t *display)
 void ui_home_update(const quota_view_t *view)
 {
     if (!view || !percent_label) return;
+    ui_dashboard_update_quota(view);
     lv_color_t status_color = lv_color_hex(view->online ? COLOR_ONLINE : 0xF39A51);
     if (!lv_color_eq(lv_obj_get_style_bg_color(status_dot, 0), status_color)) {
         lv_obj_set_style_bg_color(status_dot, status_color, 0);
@@ -317,17 +426,77 @@ void ui_home_update(const quota_view_t *view)
     set_label_text(sync_label, view->time_synced ? "时间同步: 已同步" : "时间同步: 未同步");
 }
 
+void ui_home_update_cost(const ui_cost_view_t *view)
+{
+    ui_dashboard_update_cost(view);
+}
+
 void ui_home_update_network(const network_view_t *view)
 {
     if (!view || !network_status_label) return;
     set_label_text(network_status_label, !view->configured ? "未配置" :
                       view->connected ? "已连接" : "未连接");
     set_text_color(network_status_label, view->connected ? COLOR_ONLINE : 0xF39A51);
-    set_label_text(ssid_label, view->ssid[0] ? view->ssid : "--");
+    char display_ssid[97];
+    ui_home_format_ssid(view->ssid, display_ssid, sizeof(display_ssid));
+    set_label_text(ssid_label, display_ssid[0] ? display_ssid : "--");
     char text[48];
     snprintf(text, sizeof(text), "IP: %s", view->connected ? view->ip : "--");
     set_label_text(ip_label, text);
     if (view->connected) snprintf(text, sizeof(text), "信号: %d dBm", view->rssi);
     else snprintf(text, sizeof(text), "信号: --");
     set_label_text(signal_label, text);
+}
+
+void ui_home_set_network_action(ui_network_action_cb_t callback, void *context)
+{
+    network_action_cb = callback;
+    network_action_context = context;
+    if (provision_seen) ui_home_update_provision(&provision_view);
+}
+
+void ui_home_update_provision(const provision_view_t *view)
+{
+    if (!view || !settings_status) return;
+    provision_view = *view;
+    if (!provision_seen) {
+        provision_seen = true;
+        if (!view->configured) show_page(2);
+    }
+    set_label_text(settings_status, view->active ? "配网模式" : view->configured ? "已配置" : "未配置");
+    char text[80];
+    snprintf(text, sizeof(text), "热点: %s", view->ap_ssid);
+    set_label_text(ap_name_label, view->active ? text : "手机网页配置 Wi-Fi 和 API");
+    snprintf(text, sizeof(text), "密码: %s", view->ap_password);
+    set_label_text(ap_password_label, view->active ? text : "");
+    set_label_text(ap_url_label, view->active ? "http://192.168.4.1" : "");
+    set_label_text(settings_message, view->message);
+    bool finish = view->active && view->saved && view->phase == PROVISION_SAVED;
+    if (network_action_cb && (!view->active || finish)) lv_obj_remove_flag(primary_button, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(primary_button, LV_OBJ_FLAG_HIDDEN);
+    set_label_text(primary_label, finish ? "完成配网" : view->configured ? "重新配网" : "开始配网");
+    if (network_action_cb && view->active && !view->closing) lv_obj_remove_flag(cancel_button, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(cancel_button, LV_OBJ_FLAG_HIDDEN);
+}
+
+void ui_home_format_ssid(const char *source, char *target, size_t capacity)
+{
+    if (!capacity) return;
+    size_t out = 0;
+    const unsigned char *p = (const unsigned char *)source;
+    while (*p && out + 1 < capacity) {
+        unsigned n = *p < 0x80 ? 1 : (*p & 0xe0) == 0xc0 ? 2 : (*p & 0xf0) == 0xe0 ? 3 : (*p & 0xf8) == 0xf0 ? 4 : 1;
+        uint32_t cp = *p & (n == 1 ? 0x7f : n == 2 ? 0x1f : n == 3 ? 0x0f : 7);
+        bool valid = *p < 0x80 || n > 1;
+        for (unsigned i = 1; i < n; i++) {
+            if (!p[i] || (p[i] & 0xc0) != 0x80) { valid = false; n = 1; break; }
+            cp = (cp << 6) | (p[i] & 0x3f);
+        }
+        lv_font_glyph_dsc_t glyph;
+        bool supported = valid && cp >= 32 && ui_home_zh_20.get_glyph_dsc(&ui_home_zh_20, &glyph, cp, 0);
+        if (supported && out + n < capacity) { memcpy(target + out, p, n); out += n; }
+        else target[out++] = '?';
+        p += n;
+    }
+    target[out] = 0;
 }

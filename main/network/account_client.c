@@ -1,184 +1,146 @@
 #include "account_client.h"
+#include "network_manager.h"
 #include "quota_data.h"
 #include "ui_home.h"
-#include "sdkconfig.h"
-
-#if !CONFIG_ESP_HTTP_CLIENT_ENABLE_BASIC_AUTH
-#error "Enable CONFIG_ESP_HTTP_CLIENT_ENABLE_BASIC_AUTH in menuconfig"
-#endif
-
-#include "esp_event.h"
 #include "esp_http_client.h"
+#include "esp_crt_bundle.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
-#include "esp_netif.h"
 #include "esp_netif_sntp.h"
-#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/event_groups.h"
 #include "freertos/task.h"
-#include "nvs_flash.h"
 #include <stdlib.h>
-#include <stdio.h>
 #include <string.h>
+#include <stdio.h>
 #include <time.h>
 
-#if __has_include("config.local.h")
-#include "config.local.h"
-#else
-#define CODECK_WIFI_SSID ""
-#define CODECK_WIFI_PASSWORD ""
-#define CODECK_API_URL "http://codeck.wangj.de/api/account"
-#define CODECK_API_USERNAME ""
-#define CODECK_API_PASSWORD ""
-#endif
-
-#define CONNECTED_BIT BIT0
-#define TIME_SYNCED_BIT BIT1
-#define POLL_INTERVAL_MS 60000
-#define RECONNECT_INTERVAL_MS 5000
-
 static const char *TAG = "account_client";
-static EventGroupHandle_t events;
-static TaskHandle_t request_task_handle;
-static bool started;
 static portMUX_TYPE view_lock = portMUX_INITIALIZER_UNLOCKED;
 static quota_view_t latest_view;
-
-static void publish(bool online, const quota_data_t *quota)
-{
-    portENTER_CRITICAL(&view_lock);
-    latest_view.online = online;
-    if (quota) {
-        latest_view.has_quota = true;
-        latest_view.quota = *quota;
-    }
-    portEXIT_CRITICAL(&view_lock);
-}
-
-static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
-{
-    (void)arg;
-    (void)data;
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        xEventGroupClearBits(events, CONNECTED_BIT);
-        publish(false, NULL);
-        if (request_task_handle) xTaskNotifyGive(request_task_handle);
-    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        xEventGroupSetBits(events, CONNECTED_BIT);
-        esp_err_t err = esp_netif_sntp_start();
-        if (err != ESP_OK) ESP_LOGW(TAG, "SNTP start failed: %s", esp_err_to_name(err));
-        if (request_task_handle) xTaskNotifyGive(request_task_handle);
-        ESP_LOGI(TAG, "Wi-Fi has IP; scheduling account refresh");
-    }
-}
+static bool started, synced;
+static unsigned latest_generation;
 
 static void time_sync(struct timeval *tv)
 {
     (void)tv;
-    xEventGroupSetBits(events, TIME_SYNCED_BIT);
+    portENTER_CRITICAL(&view_lock);
+    synced = true;
+    portEXIT_CRITICAL(&view_lock);
 }
 
 static esp_err_t http_event(esp_http_client_event_t *event)
 {
     if (event->event_id == HTTP_EVENT_ON_DATA && event->data_len > 0) {
-        quota_response_t *response = event->user_data;
-        if (!quota_response_append(response, event->data, (size_t)event->data_len)) return ESP_ERR_NO_MEM;
+        quota_response_t *r = event->user_data;
+        if (!quota_response_append(r, event->data, (size_t)event->data_len)) return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
 }
 
-static void fetch_account(void)
+bool account_client_check(const device_config_t *config, unsigned generation, char *message, size_t size)
 {
+    if (!network_manager_connected() || generation != network_manager_generation()) {
+        snprintf(message, size, "配置已保存，网络已断开");
+        return false;
+    }
+    if (!strncmp(config->api_url, "https://", 8)) {
+        /* Certificate validity needs a real clock. Never disable verification. */
+        for (unsigned i = 0; time(NULL) < 1704067200 && i < 100; i++) vTaskDelay(pdMS_TO_TICKS(100));
+        if (time(NULL) < 1704067200) {
+            portENTER_CRITICAL(&view_lock);
+            latest_view.online = false;
+            portEXIT_CRITICAL(&view_lock);
+            snprintf(message, size, "时间未同步，暂不能验证 HTTPS");
+            return false;
+        }
+    }
+    if (!network_manager_connected() || generation != network_manager_generation()) {
+        snprintf(message, size, "配置已保存，网络已断开");
+        return false;
+    }
     quota_response_t response = {.data = malloc(QUOTA_RESPONSE_MAX_BYTES + 1)};
     if (!response.data) {
-        ESP_LOGW(TAG, "Cannot allocate response buffer");
-        publish(false, NULL);
-        return;
+        portENTER_CRITICAL(&view_lock);
+        latest_view.online = false;
+        portEXIT_CRITICAL(&view_lock);
+        snprintf(message, size, "API 内存不足");
+        return false;
     }
-    response.data[0] = '\0';
-    esp_http_client_config_t config = {
-        .url = CODECK_API_URL,
-        .user_agent = "Codeck/1.0",
-        .username = CODECK_API_USERNAME,
-        .password = CODECK_API_PASSWORD,
-        .auth_type = HTTP_AUTH_TYPE_BASIC,
-        .method = HTTP_METHOD_GET,
-        .timeout_ms = 10000,
-        .disable_auto_redirect = true,
-        .max_authorization_retries = -1,
-        .event_handler = http_event,
-        .user_data = &response,
+    response.data[0] = 0;
+    esp_http_client_config_t http = {
+        .url = config->api_url, .username = config->api_username, .password = config->api_password,
+        .user_agent = "Codeck/1.0", .auth_type = HTTP_AUTH_TYPE_BASIC,
+        .method = HTTP_METHOD_GET, .timeout_ms = 10000, .disable_auto_redirect = true,
+        .max_authorization_retries = -1, .event_handler = http_event, .user_data = &response,
+        .crt_bundle_attach = esp_crt_bundle_attach,
     };
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) {
-        free(response.data);
-        publish(false, NULL);
-        ESP_LOGW(TAG, "HTTP client initialization failed");
-        return;
+    esp_http_client_handle_t client = esp_http_client_init(&http);
+    esp_err_t err = ESP_ERR_NO_MEM;
+    int status = 0;
+    quota_account_data_t quota;
+    bool success = false;
+    if (client) {
+        esp_http_client_set_header(client, "Accept", "application/json");
+        err = esp_http_client_perform(client);
+        status = esp_http_client_get_status_code(client);
+        success = err == ESP_OK && status == 200 && !response.overflow &&
+                  quota_parse_account_json(response.data, response.length, &quota) &&
+                  network_manager_connected() && generation == network_manager_generation();
+        esp_http_client_cleanup(client);
     }
-    esp_http_client_set_header(client, "Accept", "application/json");
-    esp_err_t err = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    quota_data_t quota;
-    bool success = err == ESP_OK && status == 200 && !response.overflow &&
-                   quota_parse_json(response.data, response.length, &quota) &&
-                   (xEventGroupGetBits(events) & CONNECTED_BIT);
-    if (success) {
-        publish(true, &quota);
-        ESP_LOGI(TAG, "Quota refreshed: %d%% remaining", quota.remaining_percent);
-    } else {
-        publish(false, NULL);
-        ESP_LOGW(TAG, "Account refresh failed: transport=%s HTTP=%d overflow=%d",
-                 esp_err_to_name(err), status, response.overflow);
+    if (generation == network_manager_generation()) {
+        portENTER_CRITICAL(&view_lock);
+        latest_view.online = success;
+        latest_generation = generation;
+        if (success) {
+            latest_view.has_quota = true;
+            latest_view.quota = quota.primary;
+            latest_view.has_weekly_quota = quota.has_secondary && quota.secondary.window_minutes == 10080;
+            latest_view.weekly_quota = quota.secondary;
+        }
+        portEXIT_CRITICAL(&view_lock);
     }
-    esp_http_client_cleanup(client);
     free(response.data);
+    if (success) snprintf(message, size, "联网成功，API 验证成功");
+    else if (err != ESP_OK) snprintf(message, size, "联网成功，API 连接或证书验证失败");
+    else if (status != 200) snprintf(message, size, "联网成功，API HTTP %d", status);
+    else snprintf(message, size, "联网成功，API 数据无效");
+    ESP_LOGI(TAG, "Account request: transport=%s HTTP=%d valid=%d", esp_err_to_name(err), status, success);
+    return success;
 }
 
 static void request_task(void *arg)
 {
     (void)arg;
-    TickType_t last_connect = xTaskGetTickCount() - pdMS_TO_TICKS(RECONNECT_INTERVAL_MS);
+    unsigned last_generation = (unsigned)-1;
+    TickType_t last_request = xTaskGetTickCount() - pdMS_TO_TICKS(60000);
     for (;;) {
-        /* Drain the notification which brought us here before starting a request. */
-        ulTaskNotifyTake(pdTRUE, 0);
-        if (xEventGroupGetBits(events) & CONNECTED_BIT) {
-            fetch_account();
-            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(POLL_INTERVAL_MS));
-        } else {
-            TickType_t elapsed = xTaskGetTickCount() - last_connect;
-            TickType_t interval = pdMS_TO_TICKS(RECONNECT_INTERVAL_MS);
-            if (elapsed >= interval) {
-                last_connect = xTaskGetTickCount();
-                esp_err_t err = esp_wifi_connect();
-                if (err != ESP_OK) ESP_LOGW(TAG, "Wi-Fi connect failed: %s", esp_err_to_name(err));
-                ulTaskNotifyTake(pdTRUE, interval);
-            } else {
-                ulTaskNotifyTake(pdTRUE, interval - elapsed);
+        provision_view_t provision;
+        network_manager_get_provision(&provision);
+        if (provision.active && provision.phase == PROVISION_CHECKING_API) {
+            device_config_t config;
+            bool configured;
+            unsigned generation = network_manager_get_config(&config, &configured);
+            char message[128];
+            bool ok = configured && account_client_check(&config, generation, message, sizeof(message));
+            network_manager_api_result(generation, ok, configured ? message : "配置不可用");
+        } else if (!provision.active && network_manager_connected()) {
+            unsigned generation = network_manager_generation();
+            TickType_t now = xTaskGetTickCount();
+            if (generation != last_generation || now - last_request >= pdMS_TO_TICKS(60000)) {
+                device_config_t config;
+                bool configured;
+                generation = network_manager_get_config(&config, &configured);
+                if (configured) {
+                    char message[128];
+                    account_client_check(&config, generation, message, sizeof(message));
+                    last_generation = generation;
+                    last_request = now;
+                }
             }
         }
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
-}
-
-static network_view_t read_network_view(void)
-{
-    network_view_t view = {.configured = CODECK_WIFI_SSID[0] != '\0'};
-    snprintf(view.ssid, sizeof(view.ssid), "%s", CODECK_WIFI_SSID);
-    wifi_ap_record_t ap;
-    esp_netif_ip_info_t ip;
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if ((xEventGroupGetBits(events) & CONNECTED_BIT) && netif &&
-        esp_wifi_sta_get_ap_info(&ap) == ESP_OK &&
-        esp_netif_get_ip_info(netif, &ip) == ESP_OK && ip.ip.addr &&
-        (xEventGroupGetBits(events) & CONNECTED_BIT)) {
-        view.connected = true;
-        memcpy(view.ssid, ap.ssid, sizeof(ap.ssid));
-        view.ssid[32] = '\0';
-        view.rssi = ap.rssi;
-        snprintf(view.ip, sizeof(view.ip), IPSTR, IP2STR(&ip.ip));
-    }
-    return view;
 }
 
 static void ui_task(void *arg)
@@ -188,98 +150,61 @@ static void ui_task(void *arg)
         quota_view_t view;
         portENTER_CRITICAL(&view_lock);
         view = latest_view;
+        view.time_synced = synced;
+        unsigned published_generation = latest_generation;
         portEXIT_CRITICAL(&view_lock);
-        view.online = view.online && (xEventGroupGetBits(events) & CONNECTED_BIT);
-        view.time_synced = (xEventGroupGetBits(events) & TIME_SYNCED_BIT) != 0;
+        view.online = view.online && network_manager_connected() &&
+                      published_generation == network_manager_generation();
         view.now = (int64_t)time(NULL);
-        network_view_t network = read_network_view();
+        network_view_t network = network_manager_get_network();
+        provision_view_t provision;
+        network_manager_get_provision(&provision);
         if (lvgl_port_lock(100)) {
             ui_home_update(&view);
             ui_home_update_network(&network);
+            ui_home_update_provision(&provision);
             lvgl_port_unlock();
         }
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
+}
+
+static void ui_action(network_action_t action, void *context)
+{
+    (void)context;
+    network_manager_action(action);
 }
 
 esp_err_t account_client_start(void)
 {
     if (started) return ESP_ERR_INVALID_STATE;
-    if (!CODECK_WIFI_SSID[0] || !CODECK_API_USERNAME[0] || !CODECK_API_PASSWORD[0]) {
-        ESP_LOGW(TAG, "Fill main/config.local.h to enable Wi-Fi and account requests");
-        return ESP_OK;
-    }
-    if (strlen(CODECK_WIFI_SSID) > 32 || strlen(CODECK_WIFI_PASSWORD) > 64 ||
-        strncmp(CODECK_API_URL, "http://", 7) != 0) return ESP_ERR_INVALID_ARG;
-
-    esp_err_t err = nvs_flash_init();
-    /* Preserve NVS on initialization errors instead of silently erasing data. */
-    if (err != ESP_OK) return err;
-    err = esp_netif_init();
-    if (err != ESP_OK) return err;
-    err = esp_event_loop_create_default();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
-    esp_netif_t *netif = NULL;
-    TaskHandle_t ui_task_handle = NULL;
-    bool wifi_initialized = false, sntp_initialized = false;
-    events = xEventGroupCreate();
-    if (!events) return ESP_ERR_NO_MEM;
-    netif = esp_netif_create_default_wifi_sta();
-    if (!netif) {
-        err = ESP_ERR_NO_MEM;
-        goto fail;
-    }
-    wifi_init_config_t init_config = WIFI_INIT_CONFIG_DEFAULT();
-    err = esp_wifi_init(&init_config);
-    if (err != ESP_OK) goto fail;
-    wifi_initialized = true;
-    err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
-    if (err != ESP_OK) goto fail;
-    err = esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, wifi_event, NULL);
-    if (err != ESP_OK) goto fail;
-    err = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL);
-    if (err != ESP_OK) goto fail;
-    if (setenv("TZ", "CST-8", 1) != 0) {
-        err = ESP_ERR_NO_MEM;
-        goto fail;
-    }
+    if (setenv("TZ", "CST-8", 1) != 0) return ESP_ERR_NO_MEM;
     tzset();
     esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("ntp.aliyun.com");
     sntp.start = false;
     sntp.sync_cb = time_sync;
-    err = esp_netif_sntp_init(&sntp);
-    if (err != ESP_OK) goto fail;
-    sntp_initialized = true;
-
-    wifi_config_t wifi = {0};
-    memcpy(wifi.sta.ssid, CODECK_WIFI_SSID, strlen(CODECK_WIFI_SSID));
-    memcpy(wifi.sta.password, CODECK_WIFI_PASSWORD, strlen(CODECK_WIFI_PASSWORD));
-    err = esp_wifi_set_mode(WIFI_MODE_STA);
-    if (err != ESP_OK) goto fail;
-    err = esp_wifi_set_config(WIFI_IF_STA, &wifi);
-    if (err != ESP_OK) goto fail;
-    err = esp_wifi_start();
-    if (err != ESP_OK) goto fail;
-    if (xTaskCreate(ui_task, "quota_ui", 4096, NULL, 3, &ui_task_handle) != pdPASS ||
-        xTaskCreate(request_task, "account_http", 8192, NULL, 4, &request_task_handle) != pdPASS) {
-        err = ESP_ERR_NO_MEM;
-        goto fail;
+    esp_err_t err = esp_netif_sntp_init(&sntp);
+    bool sntp_ready = err == ESP_OK;
+    if (!sntp_ready) ESP_LOGW(TAG, "SNTP initialization failed: %s", esp_err_to_name(err));
+    if (sntp_ready && network_manager_connected()) esp_netif_sntp_start();
+    if (!lvgl_port_lock(1000)) {
+        if (sntp_ready) esp_netif_sntp_deinit();
+        return ESP_ERR_TIMEOUT;
+    }
+    ui_home_set_network_action(ui_action, NULL);
+    lvgl_port_unlock();
+    TaskHandle_t ui_handle = NULL;
+    if (xTaskCreate(ui_task, "quota_ui", 4096, NULL, 3, &ui_handle) != pdPASS) {
+        if (sntp_ready) esp_netif_sntp_deinit();
+        if (lvgl_port_lock(1000)) {
+            ui_home_set_network_action(NULL, NULL);
+            lvgl_port_unlock();
+        }
+        return ESP_ERR_NO_MEM;
     }
     started = true;
+    /* The network/settings UI must survive a missing account worker. The
+     * manager bounds API validation, so a saved configuration remains usable. */
+    if (xTaskCreate(request_task, "account_http", 8192, NULL, 4, NULL) != pdPASS) return ESP_ERR_NO_MEM;
     return ESP_OK;
-
-fail:
-    /* A failed start must not leave background tasks using partially initialized state. */
-    if (ui_task_handle) vTaskDelete(ui_task_handle);
-    esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event);
-    esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, wifi_event);
-    if (wifi_initialized) {
-        esp_wifi_stop();
-        esp_wifi_deinit();
-    }
-    if (sntp_initialized) esp_netif_sntp_deinit();
-    if (netif) esp_netif_destroy_default_wifi(netif);
-    vEventGroupDelete(events);
-    events = NULL;
-    return err;
 }

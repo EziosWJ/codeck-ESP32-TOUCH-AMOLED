@@ -21,7 +21,28 @@ bool quota_response_append(quota_response_t *response, const char *data, size_t 
     return true;
 }
 
-bool quota_parse_json(const char *json, size_t length, quota_data_t *out)
+static bool parse_window(const cJSON *window_data, quota_data_t *out)
+{
+    const cJSON *used = cJSON_GetObjectItemCaseSensitive(window_data, "usedPercent");
+    const cJSON *window = cJSON_GetObjectItemCaseSensitive(window_data, "windowDurationMins");
+    const cJSON *reset = cJSON_GetObjectItemCaseSensitive(window_data, "resetsAt");
+    if (!cJSON_IsObject(window_data) || !cJSON_IsNumber(used) || !isfinite(used->valuedouble) ||
+        !cJSON_IsNumber(window) || !isfinite(window->valuedouble) ||
+        window->valuedouble < 1 || window->valuedouble > INT_MAX ||
+        floor(window->valuedouble) != window->valuedouble ||
+        !cJSON_IsNumber(reset) || !isfinite(reset->valuedouble) ||
+        reset->valuedouble <= 0 || reset->valuedouble > 253402300799.0 ||
+        floor(reset->valuedouble) != reset->valuedouble) return false;
+    double remaining = fmin(100.0, fmax(0.0, 100.0 - used->valuedouble));
+    *out = (quota_data_t) {
+        .remaining_percent = (int)floor(remaining + 0.5),
+        .window_minutes = (int)window->valuedouble,
+        .resets_at = (int64_t)reset->valuedouble,
+    };
+    return true;
+}
+
+bool quota_parse_account_json(const char *json, size_t length, quota_account_data_t *out)
 {
     if (!json || !out || !length || length > QUOTA_RESPONSE_MAX_BYTES) return false;
     const char *end = NULL;
@@ -34,27 +55,22 @@ bool quota_parse_json(const char *json, size_t length, quota_data_t *out)
     const cJSON *limits = cJSON_GetObjectItemCaseSensitive(root, "rate_limits");
     const cJSON *rate = cJSON_GetObjectItemCaseSensitive(limits, "rateLimits");
     const cJSON *primary = cJSON_GetObjectItemCaseSensitive(rate, "primary");
-    const cJSON *used = cJSON_GetObjectItemCaseSensitive(primary, "usedPercent");
-    const cJSON *window = cJSON_GetObjectItemCaseSensitive(primary, "windowDurationMins");
-    const cJSON *reset = cJSON_GetObjectItemCaseSensitive(primary, "resetsAt");
-    valid = valid && cJSON_IsObject(limits) && cJSON_IsObject(rate) && cJSON_IsObject(primary) &&
-            cJSON_IsNumber(used) && isfinite(used->valuedouble) &&
-            cJSON_IsNumber(window) && isfinite(window->valuedouble) &&
-            window->valuedouble >= 1 && window->valuedouble <= INT_MAX &&
-            floor(window->valuedouble) == window->valuedouble &&
-            cJSON_IsNumber(reset) && isfinite(reset->valuedouble) &&
-            reset->valuedouble > 0 && reset->valuedouble <= 253402300799.0 &&
-            floor(reset->valuedouble) == reset->valuedouble;
+    quota_account_data_t next = {0};
+    valid = valid && cJSON_IsObject(limits) && cJSON_IsObject(rate) && parse_window(primary, &next.primary);
     if (valid) {
-        double remaining = fmin(100.0, fmax(0.0, 100.0 - used->valuedouble));
-        *out = (quota_data_t) {
-            .remaining_percent = (int)floor(remaining + 0.5),
-            .window_minutes = (int)window->valuedouble,
-            .resets_at = (int64_t)reset->valuedouble,
-        };
+        next.has_secondary = parse_window(cJSON_GetObjectItemCaseSensitive(rate, "secondary"), &next.secondary);
+        *out = next;
     }
     cJSON_Delete(root);
     return valid;
+}
+
+bool quota_parse_json(const char *json, size_t length, quota_data_t *out)
+{
+    quota_account_data_t account;
+    if (!out || !quota_parse_account_json(json, length, &account)) return false;
+    *out = account.primary;
+    return true;
 }
 
 void quota_format_window(int minutes, char *out, size_t size)
