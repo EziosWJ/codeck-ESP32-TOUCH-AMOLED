@@ -77,14 +77,14 @@ bool account_client_check(const device_config_t *config, unsigned generation, ch
     esp_http_client_handle_t client = esp_http_client_init(&http);
     esp_err_t err = ESP_ERR_NO_MEM;
     int status = 0;
-    quota_data_t quota;
+    quota_account_data_t quota;
     bool success = false;
     if (client) {
         esp_http_client_set_header(client, "Accept", "application/json");
         err = esp_http_client_perform(client);
         status = esp_http_client_get_status_code(client);
         success = err == ESP_OK && status == 200 && !response.overflow &&
-                  quota_parse_json(response.data, response.length, &quota) &&
+                  quota_parse_account_json(response.data, response.length, &quota) &&
                   network_manager_connected() && generation == network_manager_generation();
         esp_http_client_cleanup(client);
     }
@@ -92,7 +92,12 @@ bool account_client_check(const device_config_t *config, unsigned generation, ch
         portENTER_CRITICAL(&view_lock);
         latest_view.online = success;
         latest_generation = generation;
-        if (success) { latest_view.has_quota = true; latest_view.quota = quota; }
+        if (success) {
+            latest_view.has_quota = true;
+            latest_view.quota = quota.primary;
+            latest_view.has_weekly_quota = quota.has_secondary && quota.secondary.window_minutes == 10080;
+            latest_view.weekly_quota = quota.secondary;
+        }
         portEXIT_CRITICAL(&view_lock);
     }
     free(response.data);

@@ -26,13 +26,18 @@ set(CONFIG_LV_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(CONFIG_LV_USE_THORVG_INTERNAL OFF CACHE BOOL "" FORCE)
 add_subdirectory("${ROOT}/managed_components/lvgl__lvgl" lvgl)
 add_executable(test_ui test_ui.c "${ROOT}/main/ui/ui_home.c"
+    "${ROOT}/main/ui/ui_dashboard.c"
     "${ROOT}/main/input/lvgl_touch_input.c"
-    "${ROOT}/main/ui/font/ui_home_zh_20.c")
+    "${ROOT}/main/ui/font/ui_home_zh_20.c"
+    "${ROOT}/main/ui/font/ui_dashboard_zh_16.c"
+    "${ROOT}/main/ui/font/ui_cost_digits_64.c")
 target_include_directories(test_ui PRIVATE stubs "${ROOT}/main/ui/include"
     "${ROOT}/main/input/include"
     "${ROOT}/managed_components/lvgl__lvgl/src")
 target_link_libraries(test_ui PRIVATE quota_data lvgl)
 add_test(NAME ui COMMAND test_ui)
+add_test(NAME ui_device_heap COMMAND test_ui)
+set_tests_properties(ui_device_heap PROPERTIES ENVIRONMENT "CODECK_UI_HEAP_BYTES=131072" TIMEOUT 15)
 
 foreach(name device_config network_manager)
     add_executable(test_${name} test_${name}.c)

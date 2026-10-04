@@ -13,7 +13,9 @@ static lv_obj_t *reset_label, *countdown_label;
 static lv_obj_t *quota_segments[5], *quota_glow, *quota_highlight;
 static lv_obj_t *network_status_label, *ssid_label, *ip_label, *signal_label;
 static lv_obj_t *service_label, *sync_label;
-static lv_obj_t *home_page, *network_page, *settings_page, *page_dots[3];
+#define PAGE_COUNT 5
+static lv_obj_t *home_page, *network_page, *settings_page, *quota_page, *cost_page;
+static lv_obj_t *page_dots[PAGE_COUNT];
 static lv_obj_t *settings_status, *ap_name_label, *ap_password_label, *ap_url_label;
 static lv_obj_t *settings_message, *primary_button, *primary_label, *cancel_button;
 static lv_obj_t *confirm_panel;
@@ -149,10 +151,10 @@ static lv_obj_t *make_network_label(lv_obj_t *parent, const char *text, int32_t 
 
 static void show_page(unsigned page)
 {
-    if (active_page == page || page > 2) return;
+    if (active_page == page || page >= PAGE_COUNT) return;
     active_page = page;
-    lv_obj_t *pages[] = {home_page, network_page, settings_page};
-    for (unsigned i = 0; i < 3; i++) {
+    lv_obj_t *pages[] = {home_page, network_page, settings_page, quota_page, cost_page};
+    for (unsigned i = 0; i < PAGE_COUNT; i++) {
         if (i == page) lv_obj_remove_flag(pages[i], LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(pages[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_bg_color(page_dots[i], lv_color_hex(i == page ? COLOR_CYAN : 0x354458), 0);
@@ -186,7 +188,7 @@ static void swipe_event(lv_event_t *event)
         lv_indev_get_point(indev, &end);
         int dx = end.x - swipe_start.x, dy = end.y - swipe_start.y;
         if (!confirming && abs(dx) >= SWIPE_DISTANCE && abs(dx) > abs(dy) &&
-            ((dx < 0 && active_page < 2) || (dx > 0 && active_page > 0))) {
+            ((dx < 0 && active_page + 1 < PAGE_COUNT) || (dx > 0 && active_page > 0))) {
             swipe_tracking = false;
             show_page(dx < 0 ? active_page + 1 : active_page - 1);
         } else if (code == LV_EVENT_RELEASED) {
@@ -325,13 +327,19 @@ esp_err_t ui_home_init(lv_display_t *display)
     home_page = lv_obj_create(screen);
     network_page = lv_obj_create(screen);
     settings_page = lv_obj_create(screen);
+    quota_page = lv_obj_create(screen);
+    cost_page = lv_obj_create(screen);
     prepare_page(home_page);
     prepare_page(network_page);
     prepare_page(settings_page);
+    prepare_page(quota_page);
+    prepare_page(cost_page);
     lv_obj_set_pos(home_page, 0, 0);
     lv_obj_set_pos(network_page, 0, 0);
     lv_obj_add_flag(network_page, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(settings_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(quota_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(cost_page, LV_OBJ_FLAG_HIDDEN);
     active_page = 0;
     confirming = provision_seen = false;
     memset(&provision_view, 0, sizeof(provision_view));
@@ -340,9 +348,11 @@ esp_err_t ui_home_init(lv_display_t *display)
     last_percent = -1;
     make_network_page(network_page);
     make_settings_page(settings_page);
-    page_dots[0] = make_dot(screen, 206, 444, 8, COLOR_CYAN);
-    page_dots[1] = make_dot(screen, 228, 444, 8, 0x354458);
-    page_dots[2] = make_dot(screen, 250, 444, 8, 0x354458);
+    ui_dashboard_init(quota_page, cost_page);
+    for (unsigned i = 0; i < PAGE_COUNT; i++) {
+        page_dots[i] = make_dot(screen, 185 + (int)i * 22, 444, 8,
+                               i == 0 ? COLOR_CYAN : 0x354458);
+    }
 
     lv_obj_t *input = lv_obj_create(screen);
     lv_obj_remove_style_all(input);
@@ -372,6 +382,7 @@ esp_err_t ui_home_init(lv_display_t *display)
 void ui_home_update(const quota_view_t *view)
 {
     if (!view || !percent_label) return;
+    ui_dashboard_update_quota(view);
     lv_color_t status_color = lv_color_hex(view->online ? COLOR_ONLINE : 0xF39A51);
     if (!lv_color_eq(lv_obj_get_style_bg_color(status_dot, 0), status_color)) {
         lv_obj_set_style_bg_color(status_dot, status_color, 0);
@@ -413,6 +424,11 @@ void ui_home_update(const quota_view_t *view)
     set_label_text(service_label, view->online ? "额度服务: 正常" : "额度服务: 不可用");
     set_text_color(service_label, view->online ? COLOR_ONLINE : COLOR_SECONDARY);
     set_label_text(sync_label, view->time_synced ? "时间同步: 已同步" : "时间同步: 未同步");
+}
+
+void ui_home_update_cost(const ui_cost_view_t *view)
+{
+    ui_dashboard_update_cost(view);
 }
 
 void ui_home_update_network(const network_view_t *view)

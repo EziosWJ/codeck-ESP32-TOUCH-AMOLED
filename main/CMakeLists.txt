@@ -8,7 +8,10 @@ idf_component_register(
         "network/quota_data.c"
         "input/lvgl_touch_input.c"
         "ui/ui_home.c"
+        "ui/ui_dashboard.c"
         "ui/font/ui_home_zh_20.c"
+        "ui/font/ui_dashboard_zh_16.c"
+        "ui/font/ui_cost_digits_64.c"
     EMBED_TXTFILES "network/provision.html"
     INCLUDE_DIRS
         "."

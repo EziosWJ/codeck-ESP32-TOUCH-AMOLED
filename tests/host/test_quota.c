@@ -66,6 +66,19 @@ int main(void)
     quota_data_t quota;
     assert(quota_parse_json(response.data, response.length, &quota));
     assert(quota.remaining_percent == 95);
+    quota_account_data_t account = {0};
+    const char *both = "{\"ok\":true,\"rate_limits\":{\"rateLimits\":{"
+        "\"primary\":{\"usedPercent\":22,\"windowDurationMins\":300,\"resetsAt\":1791120915},"
+        "\"secondary\":{\"usedPercent\":38,\"windowDurationMins\":10080,\"resetsAt\":1791380115}}}}";
+    assert(quota_parse_account_json(both, strlen(both), &account));
+    assert(account.primary.remaining_percent == 78);
+    assert(account.has_secondary && account.secondary.remaining_percent == 62);
+    assert(account.secondary.window_minutes == 10080 && account.secondary.resets_at == 1791380115);
+    assert(quota_parse_account_json(sample, strlen(sample), &account));
+    assert(account.primary.remaining_percent == 95 && !account.has_secondary);
+    quota_account_data_t previous = account;
+    assert(!quota_parse_account_json("{}", 2, &account));
+    assert(!memcmp(&account, &previous, sizeof(account)));
     char deep_json[512];
     size_t deep_length = strlen(sample) - 1;
     memcpy(deep_json, sample, deep_length);

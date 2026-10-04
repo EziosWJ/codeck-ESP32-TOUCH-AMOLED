@@ -73,6 +73,13 @@ int main(void)
  char message[128];
  const char *sample="{\"ok\":true,\"rate_limits\":{\"rateLimits\":{\"primary\":{\"usedPercent\":5,\"windowDurationMins\":300,\"resetsAt\":1791120915}}}}";
  body=sample;assert(account_client_check(&runtime,generation_test,message,sizeof(message)));assert(latest_view.online&&latest_view.quota.remaining_percent==95);
+ const char *weekly="{\"ok\":true,\"rate_limits\":{\"rateLimits\":{\"primary\":{\"usedPercent\":5,\"windowDurationMins\":300,\"resetsAt\":1791120915},\"secondary\":{\"usedPercent\":38,\"windowDurationMins\":10080,\"resetsAt\":1791380115}}}}";
+ body=weekly;assert(account_client_check(&runtime,generation_test,message,sizeof(message)));
+ assert(latest_view.has_weekly_quota&&latest_view.weekly_quota.remaining_percent==62);
+ http_status=401;assert(!account_client_check(&runtime,generation_test,message,sizeof(message)));
+ assert(latest_view.has_weekly_quota&&latest_view.weekly_quota.remaining_percent==62);
+ http_status=200;body=sample;assert(account_client_check(&runtime,generation_test,message,sizeof(message)));
+ assert(!latest_view.has_weekly_quota);
  http_status=401;assert(!account_client_check(&runtime,generation_test,message,sizeof(message)));assert(strstr(message,"401"));retained();assert(network_manager_connected());
  http_status=302;assert(!account_client_check(&runtime,generation_test,message,sizeof(message)));retained();http_status=200;
  transport_error=ESP_ERR_TIMEOUT;assert(!account_client_check(&runtime,generation_test,message,sizeof(message)));retained();transport_error=ESP_OK;
