@@ -15,6 +15,7 @@ static unsigned wait_count;
 static int task_scenario;
 static jmp_buf task_finished;
 static unsigned task_creates, task_deletes, fail_task_create, wifi_stops, sntp_deinits;
+static esp_err_t ap_error;
 
 EventGroupHandle_t xEventGroupCreate(void) { return calloc(1, sizeof(EventBits_t)); }
 EventBits_t xEventGroupGetBits(EventGroupHandle_t group) { return *group; }
@@ -58,6 +59,22 @@ esp_err_t esp_event_handler_unregister(esp_event_base_t base, int id, esp_event_
 esp_err_t esp_netif_init(void) { return ESP_OK; }
 esp_netif_t *esp_netif_create_default_wifi_sta(void) { static esp_netif_t netif; return &netif; }
 void esp_netif_destroy_default_wifi(esp_netif_t *netif) { (void)netif; }
+esp_netif_t *esp_netif_get_handle_from_ifkey(const char *key)
+{ assert(strcmp(key, "WIFI_STA_DEF") == 0); return esp_netif_create_default_wifi_sta(); }
+esp_err_t esp_netif_get_ip_info(esp_netif_t *netif, esp_netif_ip_info_t *info)
+{
+    (void)netif;
+    const unsigned char address[] = {192, 168, 1, 42};
+    memcpy(&info->ip.addr, address, sizeof(address));
+    return ESP_OK;
+}
+esp_err_t esp_wifi_sta_get_ap_info(wifi_ap_record_t *ap)
+{
+    memset(ap, 0, sizeof(*ap));
+    memcpy(ap->ssid, "Test Wi-Fi", sizeof("Test Wi-Fi"));
+    ap->rssi = -57;
+    return ap_error;
+}
 esp_err_t esp_netif_sntp_init(const esp_sntp_config_t *config) { assert(!config->start); return ESP_OK; }
 esp_err_t esp_netif_sntp_start(void) { return ESP_OK; }
 void esp_netif_sntp_deinit(void) { sntp_deinits++; }
@@ -80,6 +97,7 @@ esp_err_t nvs_flash_init(void) { return ESP_OK; }
 bool lvgl_port_lock(int timeout) { (void)timeout; return true; }
 void lvgl_port_unlock(void) {}
 void ui_home_update(const quota_view_t *view) { (void)view; }
+void ui_home_update_network(const network_view_t *view) { (void)view; }
 const char *esp_err_to_name(esp_err_t error) { (void)error; return "mock"; }
 void host_log(const char *tag, const char *format, ...) { (void)tag; (void)format; }
 esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *config)
@@ -137,6 +155,20 @@ int main(void)
     http_status = 401;
     fetch_account();
     assert_retained();
+    network_view_t network = read_network_view();
+    assert(network.configured && network.connected);
+    assert(strcmp(network.ssid, "Test Wi-Fi") == 0);
+    assert(strcmp(network.ip, "192.168.1.42") == 0 && network.rssi == -57);
+    /* An API failure must not imply Wi-Fi disconnection. */
+    ap_error = ESP_ERR_TIMEOUT;
+    network = read_network_view();
+    assert(!network.connected && !network.ip[0]);
+    ap_error = ESP_OK;
+    wifi_event(NULL, WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, NULL);
+    network = read_network_view();
+    assert(network.configured && !network.connected && !network.ip[0]);
+    assert(strcmp(network.ssid, CODECK_WIFI_SSID) == 0);
+    wifi_event(NULL, IP_EVENT, IP_EVENT_STA_GOT_IP, NULL);
     http_status = 302;
     fetch_account();
     assert_retained();

@@ -1,10 +1,17 @@
 # Generate the small LVGL 4 bpp font used by the home face on Windows.
-# Characters used by live quota labels, periods and countdowns.
+# Characters used by both pages, plus the configured SSID.
 Add-Type -AssemblyName System.Drawing
 # Code points keep this script independent of Windows PowerShell's script encoding.
-$characters = @(0x0020, 0x002d, 0x0030, 0x0031, 0x0032, 0x0033, 0x0034, 0x0035,
-    0x0036, 0x0037, 0x0038, 0x0039, 0x003a, 0x0048, 0x004d, 0x5206, 0x5c0f, 0x5ea6, 0x65f6, 0x6709,
-    0x7f6e, 0x8fd8, 0x91cd, 0x989d) | ForEach-Object { [char]$_ }
+$codePoints = @(0x20..0x7e) + @(0x4e0d, 0x4fe1, 0x5206, 0x52a1, 0x53ef, 0x53f7, 0x540c, 0x5c0f, 0x5df2, 0x5e38, 0x5ea6, 0x6001, 0x63a5, 0x65f6, 0x6709, 0x670d, 0x672a, 0x6b63, 0x6b65, 0x72b6, 0x7528, 0x7f51, 0x7f6e, 0x8054, 0x8fd8, 0x8fde, 0x914d, 0x91cd, 0x95f4, 0x989d)
+$configPath = Join-Path $PSScriptRoot '../../config.local.h'
+if (Test-Path -LiteralPath $configPath) {
+    $configText = [System.IO.File]::ReadAllText($configPath, [System.Text.Encoding]::UTF8)
+    $ssidMatch = [regex]::Match($configText, '(?m)^\s*#define\s+CODECK_WIFI_SSID\s+"([^"\r\n]*)"')
+    if ($ssidMatch.Success) {
+        $codePoints += $ssidMatch.Groups[1].Value.ToCharArray() | ForEach-Object { [int]$_ }
+    }
+}
+$characters = $codePoints | Sort-Object -Unique | ForEach-Object { [char]$_ }
 $font = [System.Drawing.Font]::new('Microsoft YaHei', 20, [System.Drawing.FontStyle]::Regular,
     [System.Drawing.GraphicsUnit]::Pixel)
 $bitmapBytes = [System.Collections.Generic.List[byte]]::new()

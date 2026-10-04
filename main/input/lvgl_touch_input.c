@@ -5,6 +5,8 @@
 static const char *TAG = "lvgl_touch";
 static ft3168_handle_t s_touch;
 static lv_point_t s_last_point;
+static bool s_pressed;
+static unsigned s_release_samples;
 
 static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
@@ -17,8 +19,12 @@ static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
         s_last_point.x = touch_data.x >= hres ? hres - 1 : touch_data.x;
         s_last_point.y = touch_data.y >= vres ? vres - 1 : touch_data.y;
         data->state = LV_INDEV_STATE_PRESSED;
+        s_pressed = true;
+        s_release_samples = 0;
     } else {
-        data->state = LV_INDEV_STATE_RELEASED;
+        /* Ignore up to two missing samples, including transient I2C errors. */
+        if (s_pressed && ++s_release_samples >= 3) s_pressed = false;
+        data->state = s_pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
     }
 
     data->point = s_last_point;
@@ -34,9 +40,12 @@ esp_err_t lvgl_touch_input_register(lv_display_t *display, ft3168_handle_t touch
 
     s_touch = touch;
     s_last_point = (lv_point_t){0};
+    s_pressed = false;
+    s_release_samples = 0;
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_display(indev, display);
     lv_indev_set_read_cb(indev, touch_read_cb);
+    lv_timer_set_period(lv_indev_get_read_timer(indev), 10);
     lv_indev_set_scroll_limit(indev, 8);
     return ESP_OK;
 }

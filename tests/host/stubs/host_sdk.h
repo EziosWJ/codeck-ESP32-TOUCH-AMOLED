@@ -1,6 +1,7 @@
 #pragma once
 #include "esp_err.h"
 #include "quota_data.h"
+#include "network_status.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/time.h>
@@ -43,6 +44,13 @@ typedef int esp_netif_t;
 esp_err_t esp_netif_init(void);
 esp_netif_t *esp_netif_create_default_wifi_sta(void);
 void esp_netif_destroy_default_wifi(esp_netif_t *netif);
+typedef struct { uint32_t addr; } esp_ip4_addr_t;
+typedef struct { esp_ip4_addr_t ip; } esp_netif_ip_info_t;
+#define IPSTR "%u.%u.%u.%u"
+#define IP2STR(ip) ((unsigned char *)&(ip)->addr)[0], ((unsigned char *)&(ip)->addr)[1], \
+                   ((unsigned char *)&(ip)->addr)[2], ((unsigned char *)&(ip)->addr)[3]
+esp_netif_t *esp_netif_get_handle_from_ifkey(const char *key);
+esp_err_t esp_netif_get_ip_info(esp_netif_t *netif, esp_netif_ip_info_t *info);
 typedef struct { bool start; void (*sync_cb)(struct timeval *); } esp_sntp_config_t;
 #define ESP_NETIF_SNTP_DEFAULT_CONFIG(server) ((esp_sntp_config_t){.start = true})
 esp_err_t esp_netif_sntp_init(const esp_sntp_config_t *config);
@@ -51,6 +59,8 @@ void esp_netif_sntp_deinit(void);
 typedef struct { int unused; } wifi_init_config_t;
 #define WIFI_INIT_CONFIG_DEFAULT() ((wifi_init_config_t){0})
 typedef struct { struct { uint8_t ssid[32], password[64]; } sta; } wifi_config_t;
+typedef struct { uint8_t ssid[33]; int8_t rssi; } wifi_ap_record_t;
+esp_err_t esp_wifi_sta_get_ap_info(wifi_ap_record_t *ap);
 #define WIFI_STORAGE_RAM 1
 #define WIFI_MODE_STA 1
 #define WIFI_IF_STA 1
@@ -89,6 +99,7 @@ esp_err_t esp_http_client_cleanup(esp_http_client_handle_t client);
 bool lvgl_port_lock(int timeout);
 void lvgl_port_unlock(void);
 void ui_home_update(const quota_view_t *view);
+void ui_home_update_network(const network_view_t *view);
 const char *esp_err_to_name(esp_err_t error);
 void host_log(const char *tag, const char *format, ...);
 #define ESP_LOGI host_log

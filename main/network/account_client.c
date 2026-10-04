@@ -19,6 +19,7 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 
@@ -160,6 +161,26 @@ static void request_task(void *arg)
     }
 }
 
+static network_view_t read_network_view(void)
+{
+    network_view_t view = {.configured = CODECK_WIFI_SSID[0] != '\0'};
+    snprintf(view.ssid, sizeof(view.ssid), "%s", CODECK_WIFI_SSID);
+    wifi_ap_record_t ap;
+    esp_netif_ip_info_t ip;
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if ((xEventGroupGetBits(events) & CONNECTED_BIT) && netif &&
+        esp_wifi_sta_get_ap_info(&ap) == ESP_OK &&
+        esp_netif_get_ip_info(netif, &ip) == ESP_OK && ip.ip.addr &&
+        (xEventGroupGetBits(events) & CONNECTED_BIT)) {
+        view.connected = true;
+        memcpy(view.ssid, ap.ssid, sizeof(ap.ssid));
+        view.ssid[32] = '\0';
+        view.rssi = ap.rssi;
+        snprintf(view.ip, sizeof(view.ip), IPSTR, IP2STR(&ip.ip));
+    }
+    return view;
+}
+
 static void ui_task(void *arg)
 {
     (void)arg;
@@ -171,8 +192,10 @@ static void ui_task(void *arg)
         view.online = view.online && (xEventGroupGetBits(events) & CONNECTED_BIT);
         view.time_synced = (xEventGroupGetBits(events) & TIME_SYNCED_BIT) != 0;
         view.now = (int64_t)time(NULL);
+        network_view_t network = read_network_view();
         if (lvgl_port_lock(100)) {
             ui_home_update(&view);
+            ui_home_update_network(&network);
             lvgl_port_unlock();
         }
         vTaskDelay(pdMS_TO_TICKS(1000));

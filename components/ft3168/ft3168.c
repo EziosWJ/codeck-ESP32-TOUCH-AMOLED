@@ -59,23 +59,17 @@ esp_err_t ft3168_read(ft3168_handle_t touch, ft3168_data_t *out_data)
     *out_data = (ft3168_data_t){0};
 
     const uint8_t count_reg = 0x02;
-    uint8_t count = 0;
+    uint8_t raw[5] = {0};
     ESP_RETURN_ON_ERROR(i2c_master_transmit_receive(touch->i2c_device, &count_reg, 1,
-                                                     &count, 1, 30),
-                        TAG, "read touch count");
+                                                     raw, sizeof(raw), 30),
+                        TAG, "read touch sample");
 
-    if ((count & 0x0F) == 0) {
+    if ((raw[0] & 0x0F) == 0 || (raw[1] & 0xC0) == 0x40) {
         return ESP_OK;
     }
 
-    const uint8_t point_reg = 0x03;
-    uint8_t raw[4] = {0};
-    ESP_RETURN_ON_ERROR(i2c_master_transmit_receive(touch->i2c_device, &point_reg, 1,
-                                                     raw, sizeof(raw), 30),
-                        TAG, "read touch coordinates");
-
-    out_data->x = ((uint16_t)(raw[0] & 0x0F) << 8) | raw[1];
-    out_data->y = ((uint16_t)(raw[2] & 0x0F) << 8) | raw[3];
+    out_data->x = ((uint16_t)(raw[1] & 0x0F) << 8) | raw[2];
+    out_data->y = ((uint16_t)(raw[3] & 0x0F) << 8) | raw[4];
     out_data->pressed = true;
     return ESP_OK;
 }
