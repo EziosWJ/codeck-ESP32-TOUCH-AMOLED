@@ -33,3 +33,22 @@ target_include_directories(test_ui PRIVATE stubs "${ROOT}/main/ui/include"
     "${ROOT}/managed_components/lvgl__lvgl/src")
 target_link_libraries(test_ui PRIVATE quota_data lvgl)
 add_test(NAME ui COMMAND test_ui)
+
+foreach(name device_config network_manager)
+    add_executable(test_${name} test_${name}.c)
+    target_include_directories(test_${name} PRIVATE stubs "${ROOT}/main/network/include")
+    target_compile_options(test_${name} PRIVATE -Wall -Wextra -Werror)
+    add_test(NAME ${name} COMMAND test_${name})
+endforeach()
+
+add_executable(test_provision_server test_provision_server.c "${ROOT}/main/network/device_config.c")
+target_include_directories(test_provision_server PRIVATE stubs "${ROOT}/main/network/include")
+target_compile_definitions(test_provision_server PRIVATE _DEFAULT_SOURCE)
+target_compile_options(test_provision_server PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(test_provision_server PRIVATE quota_data)
+add_test(NAME provision_server COMMAND test_provision_server)
+
+find_program(NODE_EXECUTABLE node)
+if(NODE_EXECUTABLE)
+    add_test(NAME provision_web COMMAND "${NODE_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_provision_web.js")
+endif()

@@ -1,7 +1,5 @@
 #pragma once
-
-#define CODECK_WIFI_SSID "YOUR_WIFI_SSID"
-#define CODECK_WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
-#define CODECK_API_URL "http://codeck.wangj.de/api/account"
-#define CODECK_API_USERNAME "YOUR_API_USERNAME"
-#define CODECK_API_PASSWORD "YOUR_API_PASSWORD"
+/* Deprecated: firmware no longer reads compile-time Wi-Fi/API credentials.
+ * Configure the device from page three and http://192.168.4.1 instead.
+ * The default API URL is defined in network/include/device_config.h.
+ */

@@ -7,6 +7,7 @@
 #include "account_client.h"
 
 #include "esp_log.h"
+#include <stdio.h>
 
 static const char *TAG = "app_main";
 
@@ -55,6 +56,17 @@ void app_main(void)
 
     lvgl_port_unlock();
     ESP_LOGI(TAG, "AMOLED home UI ready");
+    err = network_manager_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Network startup failed: %s", esp_err_to_name(err));
+        if (lvgl_port_lock(1000)) {
+            provision_view_t failure = {.phase = PROVISION_FAILED};
+            snprintf(failure.message, sizeof(failure.message), "网络启动失败，请重启设备");
+            ui_home_update_provision(&failure);
+            lvgl_port_unlock();
+        }
+        return;
+    }
     err = account_client_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Account client startup failed: %s", esp_err_to_name(err));

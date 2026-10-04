@@ -2,10 +2,14 @@ idf_component_register(
     SRCS
         "app_main.c"
         "network/account_client.c"
+        "network/device_config.c"
+        "network/network_manager.c"
+        "network/provision_server.c"
         "network/quota_data.c"
         "input/lvgl_touch_input.c"
         "ui/ui_home.c"
         "ui/font/ui_home_zh_20.c"
+    EMBED_TXTFILES "network/provision.html"
     INCLUDE_DIRS
         "."
         "network/include"
@@ -20,6 +24,8 @@ idf_component_register(
         esp_wifi
         esp_netif
         esp_event
+        esp_http_server
+        esp-tls
         esp_http_client
         nvs_flash
         espressif__cjson

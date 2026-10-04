@@ -111,6 +111,15 @@ static void snapshot(lv_obj_t *screen, const char *filename)
     lv_draw_buf_destroy(image);
 }
 
+static unsigned actions;
+static network_action_t last_action;
+static void capture_action(network_action_t action, void *context)
+{
+    assert(context == (void *)42);
+    actions++;
+    last_action = action;
+}
+
 int main(void)
 {
     setenv("TZ", "CST-8", 1);
@@ -201,6 +210,60 @@ int main(void)
     stroke((lv_point_t){233, 418}, (lv_point_t){233, 418}, 40);
     assert_active(home, network_page);
 
+    /* Three pages, non-wrapping boundaries, and modal taps share the input layer. */
+    lv_obj_t *settings = lv_obj_get_child(screen, 2);
+    provision_view_t provision = {.configured = true};
+    strcpy(provision.message, "配置已保存，可重新配网");
+    ui_home_set_network_action(capture_action, (void *)42);
+    ui_home_update_provision(&provision);
+    swipe(90, 360);
+    assert_active(home, settings);
+    swipe(360, 90); swipe(360, 90);
+    assert_active(settings, network_page);
+    swipe(360, 90);
+    assert_active(settings, home);
+    assert(has_text(settings, "重新配网"));
+    snapshot(screen, "ui_settings_idle.ppm");
+    stroke((lv_point_t){233, 374}, (lv_point_t){233, 374}, 40);
+    assert(actions == 0);
+    snapshot(screen, "ui_settings_confirm.ppm");
+    stroke((lv_point_t){233, 318}, (lv_point_t){233, 318}, 40);
+    assert(actions == 0);
+    stroke((lv_point_t){233, 374}, (lv_point_t){233, 374}, 40);
+    stroke((lv_point_t){233, 268}, (lv_point_t){233, 268}, 40);
+    assert(actions == 1 && last_action == NETWORK_PROVISION_START);
+    provision.active = true;
+    provision.phase = PROVISION_WAITING;
+    strcpy(provision.ap_ssid, "Codeck-1234");strcpy(provision.ap_password, "a1b2c3d4e5f6");
+    strcpy(provision.message, "手机连接热点后打开配网页面");
+    ui_home_update_provision(&provision);
+    assert(has_text(settings, "热点: Codeck-1234"));
+    snapshot(screen, "ui_settings_waiting.ppm");
+    stroke((lv_point_t){233, 418}, (lv_point_t){233, 418}, 40);
+    assert(actions == 2 && last_action == NETWORK_PROVISION_CANCEL);
+    provision.phase = PROVISION_CONNECTING;
+    strcpy(provision.message, "正在连接 Wi-Fi，请稍候");ui_home_update_provision(&provision);
+    snapshot(screen, "ui_settings_connecting.ppm");
+    provision.phase = PROVISION_SAVED;provision.saved = true;
+    strcpy(provision.message, "联网成功，API HTTP 401");ui_home_update_provision(&provision);
+    snapshot(screen, "ui_settings_api_error.ppm");
+    stroke((lv_point_t){233, 374}, (lv_point_t){233, 374}, 40);
+    assert(actions == 3 && last_action == NETWORK_PROVISION_FINISH);
+    provision.closing = true;provision.phase = PROVISION_STOPPING;
+    strcpy(provision.message, "正在关闭热点");ui_home_update_provision(&provision);
+    stroke((lv_point_t){233, 374}, (lv_point_t){233, 374}, 40);
+    stroke((lv_point_t){233, 418}, (lv_point_t){233, 418}, 40);
+    assert(actions == 3);
+    snapshot(screen, "ui_settings_stopping.ppm");
+    provision.closing = false;
+    provision.phase = PROVISION_FAILED;provision.saved = false;
+    strcpy(provision.message, "连接超时，请检查密码和网络");ui_home_update_provision(&provision);
+    snapshot(screen, "ui_settings_failed.ppm");
+    char safe_ssid[97];ui_home_format_ssid("Wi-Fi \xf0\x9f\x8c\x9f", safe_ssid, sizeof(safe_ssid));
+    assert(!strcmp(safe_ssid, "Wi-Fi ?"));
+    swipe(90, 360);swipe(90, 360);
+    assert_active(home, settings);
+
     /* Exercise the production touch adapter with brief losses and read errors. */
     lv_indev_delete(indev);
     assert(lvgl_touch_input_register(display, (ft3168_handle_t)1) == ESP_OK);
@@ -238,6 +301,19 @@ int main(void)
         ui_home_update_network(&network);
         assert(count_objects(screen) == objects);
     }
+    /* A clean first boot automatically selects page three only once. */
+    assert(ui_home_init(display) == ESP_OK);
+    settings = lv_obj_get_child(screen, 2);home = lv_obj_get_child(screen, 0);
+    provision = (provision_view_t){.active=true,.phase=PROVISION_WAITING};
+    strcpy(provision.ap_ssid,"Codeck-1234");strcpy(provision.ap_password,"a1b2c3d4e5f6");
+    strcpy(provision.message,"手机连接热点后打开配网页面");
+    ui_home_update_provision(&provision);
+    assert_active(settings,home);
+    snapshot(screen,"ui_settings_first_boot.ppm");
+    provision = (provision_view_t){.phase=PROVISION_FAILED};
+    strcpy(provision.message,"网络启动失败，请重启设备");
+    ui_home_update_provision(&provision);
+    snapshot(screen,"ui_settings_startup_error.ppm");
     lv_display_delete(display);
     lv_deinit();
     puts("UI snapshots and 1000 updates without recreating controls passed");
