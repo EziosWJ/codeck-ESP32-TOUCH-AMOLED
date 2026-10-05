@@ -6,7 +6,7 @@ ESP32-S3 / ESP-IDF 6.1 / LVGL 9.4。启动后连接 Wi-Fi，用 HTTP Basic Auth
 ## 手机网页配置
 
 固件不再读取 `main/config.local.h` 中的 Wi-Fi 和 API 凭据。升级后没有本版本的
-NVS 配置时，自动进入第三页“网络设置”并开启 `Codeck-XXXX` 热点。
+NVS 配置时，自动进入第五页“网络设置”并开启 `Codeck-XXXX` 热点。
 
 1. 手机连接屏幕显示的热点，输入屏幕上的独立热点密码。
 2. 打开 `http://192.168.4.1`；支持自动弹出配网页面，未弹出时手动访问。
@@ -14,8 +14,8 @@ NVS 配置时，自动进入第三页“网络设置”并开启 `Codeck-XXXX` �
    API 地址、用户名、密码。开放网络密码留空，修改配置时可以保留已保存的密码。
 4. 点击“连接并保存”。30 秒内取得 IP 后，整套配置写入 NVS，再验证额度接口。
    API 验证失败也保留配置，可在网页修改；点击“完成并关闭热点”退出配网。
-5. 更换网络或账号时，滑到第三页点击“重新配网”，确认后再次用手机配置。
-   第三页也支持完成配网和取消配网。
+5. 更换网络或账号时，滑到第五页“网络设置”点击“重新配网”，确认后再次用手机配置。
+   网络设置页也支持完成配网和取消配网。
 
 取消会恢复进入配网前的整套配置，包括已经保存的新配置；首次配置取消后回到
 未配置状态，可以重新开始。普通断网只重连，不删除配置或自动开放热点。
@@ -51,10 +51,10 @@ partition table CSV，文件设为 `partitions.csv`，再构建。NVS、PHY 和�
 
 ## 数据和状态
 
-- 已有配置默认显示额度页，页面顺序为“额度 → 联网状态 → 网络设置 → 额度详情 → 成本”。
+- 已有配置默认显示首页，页面顺序为“首页 → 额度详情 → 成本统计 → 联网状态 → 网络设置”。
   左右滑动切换相邻页面，两端不循环；底部五个圆点标识当前页面。
   全屏横滑超过 28 像素即时切换，支持慢速和略带斜向的滑动；一次触摸只切换一次。
-  联网页底部可点击“< 额度”返回。触摸每 10 ms 采样，并过滤短暂丢点。
+  联网页底部可点击“< 首页”直接返回首页。触摸每 10 ms 采样，并过滤短暂丢点。
   页面切换只重绘目标页，
   额度圆环和文字只在内容变化时更新。
 - 联网页定期更新 Wi-Fi 名称、连接状态、IPv4 地址和信号强度（dBm），并显示
@@ -63,7 +63,7 @@ partition table CSV，文件设为 `partitions.csv`，再构建。NVS、PHY 和�
 
 - 使用 HTTP GET、`Codeck/1.0` User-Agent、10 秒传输超时，禁用自动重定向和认证重试。
 - 要求 HTTP 200、`ok: true`；解析 `rate_limits.rateLimits.primary` 的
-  `usedPercent`、`windowDurationMins`、`resetsAt`；第 4 页同时显示
+  `usedPercent`、`windowDurationMins`、`resetsAt`；第 2 页同时显示
   `secondary` 中窗口为 10080 分钟的 7 天额度。周额度缺失或无效时显示占位值，
   不影响有效主额度；请求失败保留上次有效的两个窗口。忽略账户个人信息。
 - 显示剩余百分比，300 分钟显示 `5H`；JSON 正文上限为 64 KiB，支持分块接收。
@@ -74,13 +74,19 @@ partition table CSV，文件设为 `partitions.csv`，再构建。NVS、PHY 和�
   请求失败保留最后有效额度；首次请求前显示占位符。
 - 日志只记录请求状态，不输出认证凭据、个人信息或响应正文。
 
-第 5 页提供今日美元成本、较昨日变化、24 小时柱状图和总 Tokens / 未计价 Tokens /
+第 3 页提供今日美元成本、较昨日变化、24 小时柱状图和总 Tokens / 未计价 Tokens /
 对话轮次卡片。数据源在持有 LVGL 锁时调用 `ui_home_update_cost()`，传入
 `ui_cost_view_t`；各字段通过 `has_*` 标记可用性。当前 `/api/account` 尚未配置
 成本字段映射，所以设备成本页默认显示占位值，零值显示为真实零值。
 `$0.42`、`-32%`、`12.4M`、`320K` 和 `1,842` 仅为主机视觉测试数据。
 
 ## 验证
+
+首页使用贴边蓝青紫渐变额度环、大号百分比、剩余额度小时数和三张状态卡片。
+剩余小时数按窗口长度和剩余百分比估算。今日成本通过 `ui_home_update_cost()`
+同时更新首页和成本页；今日任务及运行数量通过 `ui_home_update_activity()` 传入。
+未提供数据时显示 `--`，有效零值显示 `0`，任务数量超过 999 显示 `999+`。
+这些接口均需持有 LVGL 锁；当前账号接口未映射任务及运行数量。
 
 在 Linux 或 WSL 中，完成一次 ESP-IDF 构建以下载依赖后运行：
 
@@ -116,6 +122,7 @@ ctest --test-dir build/host --output-on-failure
 ```powershell
 ./main/ui/font/generate_ui_home_font.ps1 -FontSize 16 -FontName ui_dashboard_zh_16
 ./main/ui/font/generate_ui_home_font.ps1 -FontSize 64 -FontName ui_cost_digits_64 -Symbols '$0123456789.,KM-' -Bold
+./main/ui/font/generate_ui_home_font.ps1 -FontSize 96 -FontName ui_home_digits_96 -Symbols '0123456789-' -Bold
 ```
 
 已有 `sdkconfig` 需启用 `CONFIG_LV_FONT_MONTSERRAT_20` 和

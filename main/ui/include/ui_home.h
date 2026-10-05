@@ -14,8 +14,16 @@ esp_err_t ui_home_init(lv_display_t *display);
 /** Update existing controls. Caller must hold the LVGL lock. */
 void ui_home_update(const quota_view_t *view);
 
-/** Supply optional cost statistics for page five. Caller holds the LVGL lock. */
+/** Supply optional cost statistics for the cost page. Caller holds the LVGL lock. */
 void ui_home_update_cost(const ui_cost_view_t *view);
+
+typedef struct {
+    bool has_today_tasks, has_running_tasks;
+    uint32_t today_tasks, running_tasks;
+} ui_activity_view_t;
+
+/** Supply optional home activity counts. Caller holds the LVGL lock. */
+void ui_home_update_activity(const ui_activity_view_t *view);
 
 /** Update Wi-Fi details independently of API health. Caller must hold the LVGL lock. */
 void ui_home_update_network(const network_view_t *view);

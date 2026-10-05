@@ -152,7 +152,10 @@ int main(void)
     lv_indev_set_scroll_limit(indev, 8);
     lv_obj_t *screen = lv_display_get_screen_active(display);
     lv_obj_t *home = lv_obj_get_child(screen, 0);
-    lv_obj_t *network_page = lv_obj_get_child(screen, 1);
+    lv_obj_t *quota_details = lv_obj_get_child(screen, 1);
+    lv_obj_t *cost_page = lv_obj_get_child(screen, 2);
+    lv_obj_t *network_page = lv_obj_get_child(screen, 3);
+    lv_obj_t *settings = lv_obj_get_child(screen, 4);
     uint32_t objects = count_objects(screen);
     lv_mem_monitor_t memory;
     lv_mem_monitor(&memory);
@@ -163,6 +166,26 @@ int main(void)
         .now = 1791117315, .quota = {95, 300, 1791120915}};
     ui_home_update(&view);
     snapshot(screen, "ui_95.ppm");
+    assert(has_text(home, "剩余额度 4.8 / 5.0h"));
+    assert(has_text(home, "今日成本"));
+    assert(has_text(home, "$--"));
+    view.quota.remaining_percent = 78;
+    view.now = 1791167040;
+    view.quota.resets_at = view.now + 9360;
+    ui_home_update(&view);
+    ui_home_update_cost(&(ui_cost_view_t){.has_cost = true, .today_cost_usd = .42});
+    ui_home_update_activity(&(ui_activity_view_t){.has_today_tasks = true,
+        .has_running_tasks = true, .today_tasks = 3, .running_tasks = 2});
+    assert(has_text(home, "剩余额度 3.9 / 5.0h"));
+    assert(has_text(home, "$0.42"));
+    assert(has_text(home, "3"));
+    assert(has_text(home, "2"));
+    snapshot(screen, "ui_home_reference.ppm");
+    ui_home_update_activity(&(ui_activity_view_t){.has_today_tasks = true,
+        .has_running_tasks = true});
+    assert(has_text(home, "0"));
+    ui_home_update_activity(&(ui_activity_view_t){0});
+    ui_home_update_cost(&(ui_cost_view_t){0});
     network_view_t network = {.configured = true, .connected = true,
         .ssid = "Codeck Wi-Fi", .ip = "192.168.1.42", .rssi = -57};
     ui_home_update_network(&network);
@@ -178,7 +201,11 @@ int main(void)
     /* A countdown tick should not invalidate the full-screen quota ring. */
     assert(flushed_pixels < 466 * 466 / 2);
     swipe(360, 90);
-    assert_active(network_page, home);
+    assert_active(quota_details, home);
+    swipe(360, 90);
+    assert_active(cost_page, quota_details);
+    swipe(360, 90);
+    assert_active(network_page, cost_page);
     assert(has_text(network_page, "已连接"));
     assert(has_text(network_page, "Codeck Wi-Fi"));
     assert(has_text(network_page, "IP: 192.168.1.42"));
@@ -199,49 +226,53 @@ int main(void)
     assert(has_text(network_page, "未配置"));
     snapshot(screen, "ui_network_unconfigured.ppm");
     swipe(90, 360);
-    assert_active(home, network_page);
+    assert_active(cost_page, network_page);
+    swipe(90, 360);
+    assert_active(quota_details, cost_page);
+    swipe(90, 360);
+    assert_active(home, quota_details);
     /* Slow 64 px swipes across text and blank areas must work both ways. */
     const int rows[] = {80, 120, 190, 245, 290, 340, 380};
     for (unsigned i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
         stroke((lv_point_t){270, rows[i]}, (lv_point_t){206, rows[i] + 5}, 100);
-        assert_active(network_page, home);
+        assert_active(quota_details, home);
         stroke((lv_point_t){206, rows[i]}, (lv_point_t){270, rows[i] - 5}, 100);
-        assert_active(home, network_page);
+        assert_active(home, quota_details);
     }
     stroke((lv_point_t){233, 180}, (lv_point_t){233, 280}, 40);
-    assert_active(home, network_page);
+    assert_active(home, quota_details);
     stroke((lv_point_t){233, 230}, (lv_point_t){210, 230}, 40);
-    assert_active(home, network_page);
+    assert_active(home, quota_details);
     /* A diagonal swipe switches before release; reversal cannot switch twice. */
     pointer.state = LV_INDEV_STATE_PRESSED;
     pointer.point = (lv_point_t){270, 220};
     advance(50);
     pointer.point = (lv_point_t){237, 241};
     advance(50);
-    assert_active(network_page, home);
+    assert_active(quota_details, home);
     pointer.point = (lv_point_t){340, 241};
     advance(50);
-    assert_active(network_page, home);
+    assert_active(quota_details, home);
     pointer.state = LV_INDEV_STATE_RELEASED;
     advance(100);
+    swipe(360, 90);
+    assert_active(cost_page, quota_details);
+    swipe(360, 90);
+    assert_active(network_page, cost_page);
     /* The visible return control also works with a simple tap. */
+    assert(has_text(network_page, "< 首页"));
     stroke((lv_point_t){233, 418}, (lv_point_t){233, 418}, 40);
     assert_active(home, network_page);
 
     /* Five pages, non-wrapping boundaries, and modal taps share the input layer. */
-    lv_obj_t *settings = lv_obj_get_child(screen, 2);
-    lv_obj_t *quota_details = lv_obj_get_child(screen, 3);
-    lv_obj_t *cost_page = lv_obj_get_child(screen, 4);
     provision_view_t provision = {.configured = true};
     strcpy(provision.message, "配置已保存，可重新配网");
     ui_home_set_network_action(capture_action, (void *)42);
     ui_home_update_provision(&provision);
     swipe(90, 360);
     assert_active(home, settings);
-    swipe(360, 90); swipe(360, 90);
-    assert_active(settings, network_page);
     swipe(360, 90);
-    assert_active(quota_details, settings);
+    assert_active(quota_details, home);
     assert(has_text(quota_details, "等待数据"));
     snapshot(screen, "ui_quota_details_missing_weekly.ppm");
     view.has_weekly_quota = true;
@@ -297,7 +328,15 @@ int main(void)
     advance(100);
     assert(flushed_pixels == 0);
     swipe(360, 90);
-    assert_active(cost_page, home);
+    assert_active(network_page, cost_page);
+    swipe(360, 90);
+    assert_active(settings, network_page);
+    swipe(360, 90);
+    assert_active(settings, home);
+    swipe(90, 360);
+    assert_active(network_page, settings);
+    swipe(90, 360);
+    assert_active(cost_page, network_page);
     cost.yesterday_change_percent = 12;
     ui_home_update_cost(&cost);
     snapshot(screen, "ui_cost_increase.ppm");
@@ -315,7 +354,7 @@ int main(void)
     assert(has_text(cost_page, "0"));
     snapshot(screen, "ui_cost_zero.ppm");
     ui_home_update_cost(&(ui_cost_view_t){0});
-    swipe(90, 360); swipe(90, 360);
+    swipe(360, 90); swipe(360, 90);
     assert_active(settings, cost_page);
     assert(has_text(settings, "重新配网"));
     snapshot(screen, "ui_settings_idle.ppm");
@@ -356,7 +395,7 @@ int main(void)
     snapshot(screen, "ui_settings_failed.ppm");
     char safe_ssid[97];ui_home_format_ssid("Wi-Fi \xf0\x9f\x8c\x9f", safe_ssid, sizeof(safe_ssid));
     assert(!strcmp(safe_ssid, "Wi-Fi ?"));
-    swipe(90, 360);swipe(90, 360);
+    swipe(90, 360); swipe(90, 360); swipe(90, 360); swipe(90, 360);
     assert_active(home, settings);
 
     /* Exercise the production touch adapter with brief losses and read errors. */
@@ -368,7 +407,7 @@ int main(void)
     advance(20);
     touch_sample = (ft3168_data_t){.pressed = true, .x = 238, .y = 235};
     advance(30);
-    assert_active(network_page, home);
+    assert_active(quota_details, home);
     touch_sample.pressed = false;
     advance(40);
     touch_sample = (ft3168_data_t){.pressed = true, .x = 200, .y = 220};
@@ -379,7 +418,7 @@ int main(void)
     touch_sample.x = 232;
     touch_sample.y = 235;
     advance(30);
-    assert_active(home, network_page);
+    assert_active(home, quota_details);
     touch_sample.pressed = false;
     advance(40);
     view.quota.remaining_percent = 100;
@@ -399,12 +438,15 @@ int main(void)
         ui_home_update_cost(&cost);
         assert(count_objects(screen) == objects);
     }
-    /* A clean first boot automatically selects page three only once. */
+    /* A clean first boot automatically selects the settings page only once. */
     assert(ui_home_init(display) == ESP_OK);
-    settings = lv_obj_get_child(screen, 2);home = lv_obj_get_child(screen, 0);
+    settings = lv_obj_get_child(screen, 4);home = lv_obj_get_child(screen, 0);
     provision = (provision_view_t){.active=true,.phase=PROVISION_WAITING};
     strcpy(provision.ap_ssid,"Codeck-1234");strcpy(provision.ap_password,"a1b2c3d4e5f6");
     strcpy(provision.message,"手机连接热点后打开配网页面");
+    ui_home_update_provision(&provision);
+    assert_active(settings,home);
+    provision.configured = true;
     ui_home_update_provision(&provision);
     assert_active(settings,home);
     snapshot(screen,"ui_settings_first_boot.ppm");

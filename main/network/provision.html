@@ -9,7 +9,7 @@
 <hr><label for="api_url">API 地址</label><input id="api_url" type="url" required placeholder="https://example.com/api/account"><label for="api_username">API 用户名</label><input id="api_username" autocomplete="username" required>
 <label for="api_password">API 密码</label><input id="api_password" type="password" autocomplete="new-password"><label class="check" id="keep_api_row" hidden><input type="checkbox" id="keep_api_password">保留已保存的 API 密码</label><small>HTTPS 会校验证书，需要设备先同步时间。</small>
 <button id="submit" type="submit">连接并保存</button><div id="error" role="alert"></div></form>
-<div class="card"><div id="status" role="status">等待配置</div><button id="finish" hidden>完成并关闭热点</button><small>取消配网请使用设备第三页的按钮。连接测试期间手机可能短暂掉线，请保持连接 Codeck 热点。</small></div></main>
+<div class="card"><div id="status" role="status">等待配置</div><button id="finish" hidden>完成并关闭热点</button><small>取消配网请使用设备“网络设置”页的按钮。连接测试期间手机可能短暂掉线，请保持连接 Codeck 热点。</small></div></main>
 <script>
 const $ = id => document.getElementById(id);
 let token = '', ready = false, busy = true, submitted = false;

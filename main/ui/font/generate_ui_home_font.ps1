@@ -9,7 +9,7 @@ param(
 Add-Type -AssemblyName System.Drawing
 $codePoints = @(0x20..0x7e)
 $mainRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
-foreach ($source in (Get-ChildItem -LiteralPath $mainRoot -Recurse -Filter '*.c' | Where-Object { $_.Directory.Name -ne 'font' -and ($FontName -ne 'ui_dashboard_zh_16' -or $_.Name -eq 'ui_dashboard.c') })) {
+foreach ($source in (Get-ChildItem -LiteralPath $mainRoot -Recurse -Filter '*.c' | Where-Object { $_.Directory.Name -ne 'font' -and ($FontName -ne 'ui_dashboard_zh_16' -or $_.Name -in @('ui_dashboard.c', 'ui_home.c')) })) {
     $text = [System.IO.File]::ReadAllText($source.FullName, [System.Text.Encoding]::UTF8)
     $codePoints += $text.ToCharArray() | Where-Object { [int]$_ -ge 0x3000 -and [int]$_ -le 0xffff } | ForEach-Object { [int]$_ }
 }

@@ -29,6 +29,7 @@ add_executable(test_ui test_ui.c "${ROOT}/main/ui/ui_home.c"
     "${ROOT}/main/ui/ui_dashboard.c"
     "${ROOT}/main/input/lvgl_touch_input.c"
     "${ROOT}/main/ui/font/ui_home_zh_20.c"
+    "${ROOT}/main/ui/font/ui_home_digits_96.c"
     "${ROOT}/main/ui/font/ui_dashboard_zh_16.c"
     "${ROOT}/main/ui/font/ui_cost_digits_64.c")
 target_include_directories(test_ui PRIVATE stubs "${ROOT}/main/ui/include"

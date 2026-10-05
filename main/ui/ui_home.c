@@ -4,16 +4,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 static const char *TAG = "ui_home";
 extern const lv_font_t ui_home_zh_20;
+extern const lv_font_t ui_home_digits_96;
+extern const lv_font_t ui_dashboard_zh_16;
 
 static lv_obj_t *clock_label, *status_dot, *title_label, *percent_label;
-static lv_obj_t *reset_label, *countdown_label;
-static lv_obj_t *quota_segments[5], *quota_glow, *quota_highlight;
+static lv_obj_t *reset_label, *countdown_label, *remaining_label;
+static lv_obj_t *percent_sign, *home_cost, *home_tasks, *home_running;
 static lv_obj_t *network_status_label, *ssid_label, *ip_label, *signal_label;
 static lv_obj_t *service_label, *sync_label;
-#define PAGE_COUNT 5
+enum { PAGE_HOME, PAGE_QUOTA, PAGE_COST, PAGE_NETWORK, PAGE_SETTINGS, PAGE_COUNT };
 static lv_obj_t *home_page, *network_page, *settings_page, *quota_page, *cost_page;
 static lv_obj_t *page_dots[PAGE_COUNT];
 static lv_obj_t *settings_status, *ap_name_label, *ap_password_label, *ap_url_label;
@@ -33,7 +36,6 @@ static int last_percent;
 #define COLOR_ONLINE     0x2EE6A6
 #define QUOTA_START_ANGLE 125
 #define QUOTA_SWEEP_DEGREES 290
-#define QUOTA_SEGMENT_COUNT 5
 #define SWIPE_DISTANCE 28
 #define RETURN_X 157
 #define RETURN_Y 398
@@ -66,64 +68,162 @@ static lv_obj_t *make_label(lv_obj_t *parent, const char *text, const lv_font_t 
     return label;
 }
 
-static lv_obj_t *make_arc(lv_obj_t *parent, int32_t size, int32_t width,
-                           uint32_t color, lv_opa_t indicator_opa, lv_opa_t track_opa)
+/* Draw the face directly, as on the detail pages: no full-screen canvas or
+ * transient controls are needed on the 128 KiB LVGL heap. */
+static void face_arc(lv_layer_t *layer, int x, int y, int radius, int width,
+                     int start, int end, uint32_t color, lv_opa_t opacity, bool rounded)
 {
-    lv_obj_t *arc = lv_arc_create(parent);
-    lv_obj_remove_style_all(arc);
-    lv_obj_set_size(arc, size, size);
-    lv_obj_center(arc);
-    lv_arc_set_range(arc, 0, 100);
-    /* 290 degrees around the top and sides; 70 degree gap centred at 6 o'clock. */
-    lv_arc_set_bg_angles(arc, QUOTA_START_ANGLE, 55);
-    lv_arc_set_value(arc, 0);
-    lv_obj_set_style_arc_width(arc, width, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(arc, lv_color_hex(color), LV_PART_INDICATOR);
-    lv_obj_set_style_arc_opa(arc, indicator_opa, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(arc, 20, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(arc, lv_color_hex(0x101827), LV_PART_MAIN);
-    lv_obj_set_style_arc_opa(arc, track_opa, LV_PART_MAIN);
-    lv_obj_set_style_arc_rounded(arc, true, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(arc, LV_OPA_TRANSP, LV_PART_KNOB);
-    lv_obj_remove_flag(arc, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    return arc;
+    if (start == end) return;
+    lv_draw_arc_dsc_t d;
+    lv_draw_arc_dsc_init(&d);
+    d.center = (lv_point_t){x, y};
+    d.radius = radius;
+    d.width = width;
+    d.start_angle = start;
+    d.end_angle = end;
+    d.color = lv_color_hex(color);
+    d.opa = opacity;
+    d.rounded = rounded;
+    lv_draw_arc(layer, &d);
 }
 
-static void make_quota_ring(lv_obj_t *screen)
+static void face_rect(lv_layer_t *layer, int x, int y, int w, int h, int radius,
+                      uint32_t top, uint32_t bottom, uint32_t edge)
 {
-    static const uint32_t segment_colors[QUOTA_SEGMENT_COUNT] = {
-        0x20E3FF, 0x22C9F5, 0x3280FF, 0x5568FF, 0x7C5CFF
-    };
-    /* All eight Arc objects are created once, in paint order. */
-    quota_glow = make_arc(screen, 452, 30, 0x22C9F5, LV_OPA_30, LV_OPA_TRANSP);
-    make_arc(screen, 446, 20, 0, LV_OPA_TRANSP, LV_OPA_50);
-
-    for (int32_t i = 0; i < QUOTA_SEGMENT_COUNT; i++) {
-        lv_obj_t *segment = make_arc(screen, 446, 20, segment_colors[i],
-                                     LV_OPA_COVER, LV_OPA_TRANSP);
-        quota_segments[i] = segment;
-        lv_obj_add_flag(segment, LV_OBJ_FLAG_HIDDEN);
+    lv_draw_rect_dsc_t d;
+    lv_draw_rect_dsc_init(&d);
+    d.radius = radius;
+    d.bg_color = lv_color_hex(top);
+    d.bg_grad.dir = LV_GRAD_DIR_VER;
+    d.bg_grad.stops_count = 2;
+    d.bg_grad.stops[0].color = d.bg_color;
+    d.bg_grad.stops[0].opa = LV_OPA_COVER;
+    d.bg_grad.stops[1].color = lv_color_hex(bottom);
+    d.bg_grad.stops[1].opa = LV_OPA_COVER;
+    d.bg_grad.stops[1].frac = 255;
+    d.border_width = edge ? 1 : 0;
+    d.border_color = lv_color_hex(edge);
+    if (edge) {
+        d.shadow_color = d.border_color;
+        d.shadow_width = 12;
+        d.shadow_opa = LV_OPA_20;
     }
-
-    quota_highlight = make_arc(screen, 438, 5, 0x7CF4FF, LV_OPA_50, LV_OPA_TRANSP);
-    lv_obj_add_flag(quota_glow, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(quota_highlight, LV_OBJ_FLAG_HIDDEN);
+    lv_area_t area = {x, y, x + w - 1, y + h - 1};
+    lv_draw_rect(layer, &d, &area);
 }
 
-static void make_reset_glass(lv_obj_t *screen)
+static void face_line(lv_layer_t *layer, int x1, int y1, int x2, int y2,
+                      uint32_t color, int width)
 {
-    lv_obj_t *glass = lv_obj_create(screen);
-    lv_obj_remove_style_all(glass);
-    lv_obj_set_pos(glass, 115, 278);
-    lv_obj_set_size(glass, 236, 102);
-    lv_obj_set_style_radius(glass, 22, 0);
-    lv_obj_set_style_bg_color(glass, lv_color_hex(0x08131F), 0);
-    lv_obj_set_style_bg_opa(glass, LV_OPA_40, 0);
-    lv_obj_set_style_border_color(glass, lv_color_hex(0x26618A), 0);
-    lv_obj_set_style_border_width(glass, 1, 0);
-    lv_obj_set_style_border_opa(glass, LV_OPA_30, 0);
-    lv_obj_remove_flag(glass, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_draw_line_dsc_t d;
+    lv_draw_line_dsc_init(&d);
+    d.p1 = (lv_point_precise_t){x1, y1};
+    d.p2 = (lv_point_precise_t){x2, y2};
+    d.color = lv_color_hex(color);
+    d.width = width;
+    d.round_start = d.round_end = true;
+    lv_draw_line(layer, &d);
+}
+
+static void face_gradient(lv_layer_t *layer, int x, int y, int radius, int width,
+                          int start, int sweep, const uint32_t colors[4])
+{
+    for (int i = 0; i < 48; i++) {
+        int a = start + sweep * i / 48;
+        int b = start + sweep * (i + 1) / 48;
+        if (a == b) continue;
+        /* Keep the blue/cyan/blue/violet palette anchored to the dial, even
+         * when the remaining percentage changes. */
+        int position = (a - start) * 3 * 255 / QUOTA_SWEEP_DEGREES;
+        int stop = position / 255;
+        if (stop > 2) stop = 2;
+        lv_color_t color = lv_color_mix(lv_color_hex(colors[stop + 1]),
+                                       lv_color_hex(colors[stop]), position - stop * 255);
+        face_arc(layer, x, y, radius, width, a, b + (i < 47 ? 1 : 0),
+                 lv_color_to_u32(color) & 0xffffff, LV_OPA_COVER, i == 0 || i == 47);
+    }
+}
+
+static void draw_home(lv_event_t *event)
+{
+    lv_area_t area;
+    lv_obj_get_coords(lv_event_get_target_obj(event), &area);
+    lv_layer_t *layer = lv_event_get_layer(event);
+    int x = area.x1, y = area.y1;
+    face_rect(layer, x + 8, y + 8, 450, 450, LV_RADIUS_CIRCLE, 0x020E17, 0x02030C, 0);
+    face_rect(layer, x + 73, y + 103, 320, 320, LV_RADIUS_CIRCLE, 0x062233, 0x01050E, 0x124C70);
+    face_arc(layer, x + 233, y + 233, 226, 2, 38, 142, 0x6651FA, LV_OPA_70, true);
+    static const uint32_t track[] = {0x092F52, 0x063D43, 0x142A55, 0x48207A};
+    static const uint32_t bright[] = {0x187FFF, 0x16ECEB, 0x218FFF, 0xBE53FF};
+    face_gradient(layer, x + 233, y + 233, 219, 18, QUOTA_START_ANGLE,
+                  QUOTA_SWEEP_DEGREES, track);
+    /* Fine dial ticks sit inside the bright outer ring. */
+    for (int a = 125; a <= 415; a += 5) {
+        double rad = a * 3.141592653589793 / 180.0;
+        int inner = a % 25 == 0 ? 194 : 198;
+        face_line(layer, x + 233 + (int)(inner * cos(rad)), y + 233 + (int)(inner * sin(rad)),
+                  x + 233 + (int)(202 * cos(rad)), y + 233 + (int)(202 * sin(rad)),
+                  a % 25 == 0 ? 0x185B80 : 0x0B293F, 1);
+    }
+    int sweep = last_percent > 0 ? QUOTA_SWEEP_DEGREES * last_percent / 100 : 0;
+    if (sweep) {
+        face_arc(layer, x + 233, y + 233, 223, 26, 125, 125 + sweep, 0x167ED8, LV_OPA_20, true);
+        face_gradient(layer, x + 233, y + 233, 219, 18, 125, sweep, bright);
+        double rad = (125 + sweep) * 3.141592653589793 / 180.0;
+        int cx = x + 233 + (int)(210 * cos(rad));
+        int cy = y + 233 + (int)(210 * sin(rad));
+        face_rect(layer, cx - 13, cy - 13, 26, 26, LV_RADIUS_CIRCLE, 0x124D86, 0x124D86, 0);
+        face_rect(layer, cx - 9, cy - 9, 18, 18, LV_RADIUS_CIRCLE, 0xFFFFFF, 0xBEF8FF, 0);
+    }
+    static const int stars[][2] = {{69, 199}, {115, 184}, {92, 255}, {389, 204}, {362, 287}, {142, 430}, {320, 432}};
+    for (unsigned i = 0; i < sizeof(stars) / sizeof(stars[0]); i++) {
+        face_rect(layer, x + stars[i][0], y + stars[i][1], 2, 2, 1,
+                  i < 3 ? 0x18CFFF : 0x7868FF, 0x279AFF, 0);
+    }
+    /* Clock icons and a quiet divider keep the reset information in the face. */
+    face_arc(layer, x + 177, y + 125, 9, 2, 0, 360, COLOR_CYAN, LV_OPA_COVER, false);
+    face_line(layer, x + 177, y + 125, x + 177, y + 119, COLOR_CYAN, 2);
+    face_line(layer, x + 177, y + 125, x + 182, y + 125, COLOR_CYAN, 2);
+    face_line(layer, x + 141, y + 279, x + 325, y + 279, 0x1C425A, 1);
+    face_arc(layer, x + 161, y + 293, 7, 2, 0, 360, COLOR_SECONDARY, LV_OPA_COVER, false);
+    face_line(layer, x + 161, y + 293, x + 161, y + 288, COLOR_SECONDARY, 1);
+    face_line(layer, x + 161, y + 293, x + 165, y + 293, COLOR_SECONDARY, 1);
+    static const uint32_t edges[] = {0x7545C1, 0x009B98, 0x176DD7};
+    for (int i = 0; i < 3; i++) {
+        int left = x + 89 + i * 98;
+        face_rect(layer, left, y + 337, 92, 88, 34,
+                  i == 1 ? 0x042B29 : 0x10152D, 0x030714, edges[i]);
+    }
+    face_rect(layer, x + 124, y + 348, 23, 23, LV_RADIUS_CIRCLE, 0xFF72A4, 0xEE397E, 0);
+    face_rect(layer, x + 225, y + 350, 16, 16, 2, 0x042B29, 0x042B29, 0x00E2BC);
+    face_line(layer, x + 229, y + 357, x + 233, y + 361, 0x00E2BC, 2);
+    face_line(layer, x + 233, y + 361, x + 243, y + 350, 0x00E2BC, 2);
+    lv_draw_triangle_dsc_t triangle;
+    lv_draw_triangle_dsc_init(&triangle);
+    triangle.color = lv_color_hex(0x159FFF);
+    triangle.p[0] = (lv_point_precise_t){x + 326, y + 348};
+    triangle.p[1] = (lv_point_precise_t){x + 326, y + 369};
+    triangle.p[2] = (lv_point_precise_t){x + 343, y + 358};
+    lv_draw_triangle(layer, &triangle);
+}
+
+static lv_obj_t *face_label(lv_obj_t *parent, const char *text, const lv_font_t *font,
+                            uint32_t color, int x, int y, int width)
+{
+    lv_obj_t *label = make_label(parent, text, font, color, x, y, 256);
+    lv_obj_set_width(label, width);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    return label;
+}
+
+static void center_percent(void)
+{
+    lv_obj_update_layout(percent_label);
+    int width = lv_obj_get_width(percent_label);
+    int sign_width = lv_obj_get_width(percent_sign);
+    int left = (466 - width - sign_width - 3) / 2;
+    lv_obj_set_x(percent_label, left);
+    lv_obj_set_x(percent_sign, left + width + 3);
 }
 
 static lv_obj_t *make_dot(lv_obj_t *parent, int32_t x, int32_t y, int32_t size, uint32_t color)
@@ -153,7 +253,7 @@ static void show_page(unsigned page)
 {
     if (active_page == page || page >= PAGE_COUNT) return;
     active_page = page;
-    lv_obj_t *pages[] = {home_page, network_page, settings_page, quota_page, cost_page};
+    lv_obj_t *pages[] = {home_page, quota_page, cost_page, network_page, settings_page};
     for (unsigned i = 0; i < PAGE_COUNT; i++) {
         if (i == page) lv_obj_remove_flag(pages[i], LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(pages[i], LV_OBJ_FLAG_HIDDEN);
@@ -194,9 +294,9 @@ static void swipe_event(lv_event_t *event)
         } else if (code == LV_EVENT_RELEASED) {
             swipe_tracking = false;
             if (abs(dx) >= 12 || abs(dy) >= 12) return;
-            if (active_page == 1 && inside(swipe_start, RETURN_X, RETURN_Y, RETURN_WIDTH, RETURN_HEIGHT) &&
-                inside(end, RETURN_X, RETURN_Y, RETURN_WIDTH, RETURN_HEIGHT)) show_page(0);
-            else if (active_page == 2) {
+            if (active_page == PAGE_NETWORK && inside(swipe_start, RETURN_X, RETURN_Y, RETURN_WIDTH, RETURN_HEIGHT) &&
+                inside(end, RETURN_X, RETURN_Y, RETURN_WIDTH, RETURN_HEIGHT)) show_page(PAGE_HOME);
+            else if (active_page == PAGE_SETTINGS) {
                 if (confirming) {
                     if (inside(swipe_start, 113, 248, 240, 40) && inside(end, 113, 248, 240, 40)) {
                         confirming = false;
@@ -249,7 +349,7 @@ static void make_network_page(lv_obj_t *page)
     lv_obj_set_style_border_width(back, 1, 0);
     lv_obj_set_style_border_color(back, lv_color_hex(0x26618A), 0);
     lv_obj_remove_flag(back, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *label = make_label(back, "< 额度", &ui_home_zh_20, COLOR_CYAN, 0, 0, 256);
+    lv_obj_t *label = make_label(back, "< 首页", &ui_home_zh_20, COLOR_CYAN, 0, 0, 256);
     lv_obj_center(label);
 }
 
@@ -325,10 +425,10 @@ esp_err_t ui_home_init(lv_display_t *display)
     lv_obj_set_style_pad_all(screen, 0, 0);
 
     home_page = lv_obj_create(screen);
-    network_page = lv_obj_create(screen);
-    settings_page = lv_obj_create(screen);
     quota_page = lv_obj_create(screen);
     cost_page = lv_obj_create(screen);
+    network_page = lv_obj_create(screen);
+    settings_page = lv_obj_create(screen);
     prepare_page(home_page);
     prepare_page(network_page);
     prepare_page(settings_page);
@@ -340,7 +440,7 @@ esp_err_t ui_home_init(lv_display_t *display)
     lv_obj_add_flag(settings_page, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(quota_page, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(cost_page, LV_OBJ_FLAG_HIDDEN);
-    active_page = 0;
+    active_page = PAGE_HOME;
     confirming = provision_seen = false;
     memset(&provision_view, 0, sizeof(provision_view));
     network_action_cb = NULL;
@@ -361,20 +461,25 @@ esp_err_t ui_home_init(lv_display_t *display)
     lv_obj_add_flag(input, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_PRESS_LOCK);
     lv_obj_add_event_cb(input, swipe_event, LV_EVENT_ALL, NULL);
 
-    /* Keep the existing home layout in the first tile. */
     screen = home_page;
-    make_quota_ring(screen);
-    make_reset_glass(screen);
-
-    clock_label = make_label(screen, "", &lv_font_montserrat_28, COLOR_TEXT, 196, 40, 256);
-    status_dot = make_dot(screen, 164, 87, 10, COLOR_SECONDARY);
-    make_label(screen, "Codeck", &lv_font_montserrat_28, COLOR_TEXT, 183, 78, 256);
-    title_label = make_label(screen, "-- 额度", &ui_home_zh_20, COLOR_CYAN, 193, 125, 384);
-    percent_label = make_label(screen, "--", &lv_font_montserrat_48, COLOR_TEXT, 170, 189, 496);
-    make_label(screen, "%", &lv_font_montserrat_28, COLOR_TEXT, 295, 216, 496);
-
-    reset_label = make_label(screen, "", &ui_home_zh_20, COLOR_SECONDARY, 173, 295, 256);
-    countdown_label = make_label(screen, "", &ui_home_zh_20, COLOR_CYAN, 154, 334, 288);
+    lv_obj_add_event_cb(screen, draw_home, LV_EVENT_DRAW_MAIN, NULL);
+    clock_label = face_label(screen, "", &lv_font_montserrat_20, COLOR_TEXT, 178, 50, 110);
+    status_dot = make_dot(screen, 182, 85, 12, COLOR_SECONDARY);
+    make_label(screen, "Codeck", &lv_font_montserrat_24, COLOR_TEXT, 203, 77, 256);
+    title_label = face_label(screen, "-- 额度", &ui_home_zh_20, COLOR_TEXT, 189, 109, 113);
+    percent_label = make_label(screen, "--", &ui_home_digits_96, COLOR_TEXT, 0, 141, 256);
+    percent_sign = make_label(screen, "%", &lv_font_montserrat_36, COLOR_TEXT, 0, 201, 256);
+    center_percent();
+    remaining_label = face_label(screen, "剩余额度 -- / --h", &ui_home_zh_20, COLOR_CYAN, 98, 244, 270);
+    reset_label = make_label(screen, "", &ui_dashboard_zh_16, COLOR_SECONDARY, 178, 283, 256);
+    countdown_label = face_label(screen, "", &ui_home_zh_20, COLOR_CYAN, 93, 305, 280);
+    face_label(screen, "$", &lv_font_montserrat_20, 0x111323, 124, 350, 23);
+    home_cost = face_label(screen, "$--", &lv_font_montserrat_24, COLOR_TEXT, 90, 374, 90);
+    home_tasks = face_label(screen, "--", &lv_font_montserrat_28, COLOR_TEXT, 188, 372, 90);
+    home_running = face_label(screen, "--", &lv_font_montserrat_28, COLOR_TEXT, 286, 372, 90);
+    face_label(screen, "今日成本", &ui_dashboard_zh_16, 0xBCC8F5, 91, 401, 90);
+    face_label(screen, "今日任务", &ui_dashboard_zh_16, 0xA6E8EB, 189, 401, 90);
+    face_label(screen, "运行中", &ui_dashboard_zh_16, 0xA8C5FA, 287, 401, 90);
 
     return ESP_OK;
 }
@@ -394,32 +499,36 @@ void ui_home_update(const quota_view_t *view)
         snprintf(percent, sizeof(percent), "%d", view->quota.remaining_percent);
         set_label_text(title_label, title);
         set_label_text(percent_label, percent);
-        if (last_percent != view->quota.remaining_percent) {
-            lv_obj_set_x(percent_label, view->quota.remaining_percent == 100 ? 135 :
-                                       view->quota.remaining_percent < 10 ? 195 : 170);
-            int32_t sweep = QUOTA_SWEEP_DEGREES * view->quota.remaining_percent / 100;
-            lv_obj_t *effects[] = {quota_glow, quota_highlight};
-            for (size_t i = 0; i < 2; i++) {
-                lv_arc_set_value(effects[i], view->quota.remaining_percent);
-                if (sweep) lv_obj_remove_flag(effects[i], LV_OBJ_FLAG_HIDDEN);
-                else lv_obj_add_flag(effects[i], LV_OBJ_FLAG_HIDDEN);
-            }
-            for (int32_t i = 0; i < QUOTA_SEGMENT_COUNT; i++) {
-                int32_t start = QUOTA_START_ANGLE + sweep * i / QUOTA_SEGMENT_COUNT;
-                int32_t end = QUOTA_START_ANGLE + sweep * (i + 1) / QUOTA_SEGMENT_COUNT;
-                if (end > start) {
-                    if (i > 0) start--;
-                    lv_arc_set_angles(quota_segments[i], start, end);
-                    lv_obj_remove_flag(quota_segments[i], LV_OBJ_FLAG_HIDDEN);
-                } else lv_obj_add_flag(quota_segments[i], LV_OBJ_FLAG_HIDDEN);
-            }
-            last_percent = view->quota.remaining_percent;
+        center_percent();
+        int percent_value = view->quota.remaining_percent;
+        if (percent_value < 0) percent_value = 0;
+        if (percent_value > 100) percent_value = 100;
+        if (last_percent != percent_value) {
+            last_percent = percent_value;
+            lv_obj_invalidate(home_page);
+        }
+        char remaining[80];
+        double hours = view->quota.window_minutes / 60.0;
+        snprintf(remaining, sizeof(remaining), "剩余额度 %.1f / %.1fh",
+                 hours * percent_value / 100.0, hours);
+        set_label_text(remaining_label, remaining);
+    } else {
+        set_label_text(title_label, "-- 额度");
+        set_label_text(percent_label, "--");
+        set_label_text(remaining_label, "剩余额度 -- / --h");
+        center_percent();
+        if (last_percent != -1) {
+            last_percent = -1;
+            lv_obj_invalidate(home_page);
         }
     }
     char clock[8], reset[32], countdown[80];
     quota_format_times(view, clock, sizeof(clock), reset, sizeof(reset), countdown, sizeof(countdown));
     set_label_text(clock_label, clock);
-    set_label_text(reset_label, reset);
+    char reset_display[48];
+    if (reset[0]) snprintf(reset_display, sizeof(reset_display), "重置时间 %.5s", reset);
+    else reset_display[0] = '\0';
+    set_label_text(reset_label, reset_display);
     set_label_text(countdown_label, countdown);
     set_label_text(service_label, view->online ? "额度服务: 正常" : "额度服务: 不可用");
     set_text_color(service_label, view->online ? COLOR_ONLINE : COLOR_SECONDARY);
@@ -429,6 +538,29 @@ void ui_home_update(const quota_view_t *view)
 void ui_home_update_cost(const ui_cost_view_t *view)
 {
     ui_dashboard_update_cost(view);
+    if (!view || !home_cost) return;
+    char text[32];
+    if (view->has_cost && isfinite(view->today_cost_usd) && view->today_cost_usd >= 0) {
+        if (view->today_cost_usd < 1000) snprintf(text, sizeof(text), "$%.2f", view->today_cost_usd);
+        else snprintf(text, sizeof(text), "$%.1fK", fmin(view->today_cost_usd / 1000, 999.9));
+    } else snprintf(text, sizeof(text), "$--");
+    const lv_font_t *font = strlen(text) > 5 ? &lv_font_montserrat_20 : &lv_font_montserrat_24;
+    if (lv_obj_get_style_text_font(home_cost, 0) != font) lv_obj_set_style_text_font(home_cost, font, 0);
+    set_label_text(home_cost, text);
+}
+
+void ui_home_update_activity(const ui_activity_view_t *view)
+{
+    if (!view || !home_tasks) return;
+    char text[24];
+    if (view->has_today_tasks && view->today_tasks > 999) snprintf(text, sizeof(text), "999+");
+    else if (view->has_today_tasks) snprintf(text, sizeof(text), "%u", (unsigned)view->today_tasks);
+    else snprintf(text, sizeof(text), "--");
+    set_label_text(home_tasks, text);
+    if (view->has_running_tasks && view->running_tasks > 999) snprintf(text, sizeof(text), "999+");
+    else if (view->has_running_tasks) snprintf(text, sizeof(text), "%u", (unsigned)view->running_tasks);
+    else snprintf(text, sizeof(text), "--");
+    set_label_text(home_running, text);
 }
 
 void ui_home_update_network(const network_view_t *view)
@@ -461,7 +593,7 @@ void ui_home_update_provision(const provision_view_t *view)
     provision_view = *view;
     if (!provision_seen) {
         provision_seen = true;
-        if (!view->configured) show_page(2);
+        if (!view->configured) show_page(PAGE_SETTINGS);
     }
     set_label_text(settings_status, view->active ? "配网模式" : view->configured ? "已配置" : "未配置");
     char text[80];

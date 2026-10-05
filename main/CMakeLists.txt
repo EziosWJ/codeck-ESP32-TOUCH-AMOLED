@@ -10,6 +10,7 @@ idf_component_register(
         "ui/ui_home.c"
         "ui/ui_dashboard.c"
         "ui/font/ui_home_zh_20.c"
+        "ui/font/ui_home_digits_96.c"
         "ui/font/ui_dashboard_zh_16.c"
         "ui/font/ui_cost_digits_64.c"
     EMBED_TXTFILES "network/provision.html"
