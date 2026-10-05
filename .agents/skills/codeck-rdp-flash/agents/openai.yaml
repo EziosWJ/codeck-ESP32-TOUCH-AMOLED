@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codeck RDP 串口烧录"
+  short_description: "通过 RDP 转发串口逐步引导 Codeck 构建、下载模式、烧录校验和启动确认"
+  default_prompt: "使用 $codeck-rdp-flash，通过 COM5 烧录当前项目固件，逐步提示我操作并等待我的反馈。"
