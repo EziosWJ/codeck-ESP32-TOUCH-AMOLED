@@ -24,6 +24,7 @@ API 验证超过 30 秒时显示超时，仍可完成已经保存的配置；SNT
 不会阻止网络设置界面运行。网络初始化失败会在屏幕提示重启，不自动擦除 NVS。
 配置保存后断电重启仍有效。热点密码每次开机随机生成，
 配置网页和 DNS 服务仅在配网期间开启，HTTP 服务绑定热点接口。
+HTTP 服务会等待热点网络接口就绪后再绑定，避免启动时误绑定到 STA 接口。
 
 API 默认地址为 `http://codeck.wangj.de/api/account`，须可从设备所连网络访问；
 设备上的 `localhost` 指设备自身。支持 HTTP 与 HTTPS，HTTPS 使用内置 CA
@@ -119,5 +120,7 @@ ctest --test-dir build/host --output-on-failure
 
 已有 `sdkconfig` 需启用 `CONFIG_LV_FONT_MONTSERRAT_20` 和
 `CONFIG_LV_FONT_MONTSERRAT_36`，并将 `CONFIG_LV_MEM_SIZE_KILOBYTES` 设为 128。
-新项目由 `sdkconfig.defaults` 启用。主机测试以 128 KiB 堆预算额外验证
+新项目由 `sdkconfig.defaults` 启用。设备的 128 KiB LVGL 控件堆从 PSRAM 分配，
+两个 40 行 DMA 绘图缓冲区留在内部 RAM，默认关闭软件旋转，避免显示初始化耗尽
+内部内存。主机测试以 128 KiB 堆预算额外验证
 五页滑动和 1000 次更新，绘制峰值约 84 KiB；不在设备上分配整屏截图缓冲。

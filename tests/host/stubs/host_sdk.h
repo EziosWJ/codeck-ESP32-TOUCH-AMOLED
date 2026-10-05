@@ -51,6 +51,7 @@ typedef struct { esp_ip4_addr_t ip, gw, netmask; } esp_netif_ip_info_t;
                    ((unsigned char *)&(ip)->addr)[2], ((unsigned char *)&(ip)->addr)[3]
 esp_netif_t *esp_netif_get_handle_from_ifkey(const char *key);
 esp_err_t esp_netif_get_ip_info(esp_netif_t *netif, esp_netif_ip_info_t *info);
+bool esp_netif_is_netif_up(esp_netif_t *netif);
 typedef struct { bool start; void (*sync_cb)(struct timeval *); } esp_sntp_config_t;
 #define ESP_NETIF_SNTP_DEFAULT_CONFIG(server) ((esp_sntp_config_t){.start = true})
 esp_err_t esp_netif_sntp_init(const esp_sntp_config_t *config);
@@ -108,6 +109,7 @@ const char *esp_err_to_name(esp_err_t error);
 void host_log(const char *tag, const char *format, ...);
 #define ESP_LOGI host_log
 #define ESP_LOGW host_log
+#define ESP_LOGE host_log
 
 typedef void *QueueHandle_t;
 QueueHandle_t xQueueCreate(unsigned count, unsigned size);

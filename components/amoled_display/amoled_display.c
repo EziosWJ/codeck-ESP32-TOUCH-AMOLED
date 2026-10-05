@@ -174,7 +174,8 @@ esp_err_t amoled_display_init(lv_display_t **out_display)
         .flags = {
             .buff_dma = true,
             .swap_bytes = true,
-            .sw_rotate = true,
+            /* The application uses the panel's native orientation. */
+            .sw_rotate = false,
         },
     };
     *out_display = lvgl_port_add_disp(&display_config);

@@ -1,7 +1,17 @@
+/* Run startup without binding the host machine to the device's AP address. */
+#define socket test_dns_socket
+#define bind test_dns_bind
+#define fcntl test_dns_fcntl
+#define close test_dns_close
 #include "../../main/network/provision_server.c"
+#undef socket
+#undef bind
+#undef fcntl
+#undef close
 #include "nvs.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdarg.h>
 const char test_page[] asm("_binary_provision_html_start") = "test-page";
 static device_config_t saved_config,submitted_config;
 static provision_view_t state;
@@ -9,6 +19,18 @@ static bool has_config=true;
 static unsigned submits,finish_calls;
 static esp_err_t submit_error,scan_error;
 static char response[8192],response_status[64],location[128];
+static TickType_t ticks,ap_ready_at;
+static unsigned http_starts,http_stops,dns_closes;
+static bool ap_missing,dns_bind_failed;
+static esp_err_t http_start_error;
+TickType_t xTaskGetTickCount(void){return ticks;}
+void vTaskDelay(TickType_t delay){ticks+=delay;}
+void host_log(const char *tag,const char *format,...){(void)tag;(void)format;}
+const char *esp_err_to_name(esp_err_t err){(void)err;return "test error";}
+int test_dns_socket(int domain,int type,int protocol){assert(domain==AF_INET&&type==SOCK_DGRAM&&protocol==IPPROTO_UDP);return 80;}
+int test_dns_bind(int fd,const struct sockaddr *address,socklen_t size){assert(fd==80&&size==sizeof(struct sockaddr_in));const struct sockaddr_in *a=(const struct sockaddr_in *)address;assert(a->sin_port==htons(53)&&a->sin_addr.s_addr==inet_addr("192.168.4.1"));return dns_bind_failed?-1:0;}
+int test_dns_fcntl(int fd,int command,...){assert(fd==80&&command==F_SETFL);va_list args;va_start(args,command);assert(va_arg(args,int)==O_NONBLOCK);va_end(args);return 0;}
+int test_dns_close(int fd){assert(fd==80);dns_closes++;return 0;}
 unsigned network_manager_get_config(device_config_t *c,bool *has){*c=saved_config;*has=has_config;return 1;}
 void network_manager_get_provision(provision_view_t *v){*v=state;}
 bool network_manager_connected(void){return true;}
@@ -17,8 +39,9 @@ esp_err_t network_manager_action(network_action_t a){assert(a==NETWORK_PROVISION
 esp_err_t esp_wifi_scan_start(const wifi_scan_config_t *c,bool block){assert(c->show_hidden&&block);return scan_error;}
 esp_err_t esp_wifi_scan_get_ap_records(uint16_t *count,wifi_ap_record_t *records){*count=1;memset(records,0,sizeof(*records));strcpy((char *)records[0].ssid,"<Wi-Fi>&");records[0].rssi=-55;records[0].authmode=WIFI_AUTH_WPA2_PSK;return ESP_OK;}
 esp_err_t esp_wifi_clear_ap_list(void){return ESP_OK;}
-esp_netif_t *esp_netif_get_handle_from_ifkey(const char *key){(void)key;static esp_netif_t n;return &n;}
-esp_err_t esp_netif_get_netif_impl_name(esp_netif_t *n,char *name){(void)n;strcpy(name,"ap0");return ESP_OK;}
+esp_netif_t *esp_netif_get_handle_from_ifkey(const char *key){assert(!strcmp(key,"WIFI_AP_DEF"));static esp_netif_t n;return ap_missing?NULL:&n;}
+bool esp_netif_is_netif_up(esp_netif_t *n){assert(n);return ticks>=ap_ready_at;}
+esp_err_t esp_netif_get_netif_impl_name(esp_netif_t *n,char *name){assert(esp_netif_is_netif_up(n));strcpy(name,"ap1");return ESP_OK;}
 uint32_t esp_random(void){return 0x12345678;}
 esp_err_t httpd_resp_send_err(httpd_req_t *r,int code,const char *m){(void)r;snprintf(response_status,sizeof(response_status),"%d",code);snprintf(response,sizeof(response),"%s",m);return ESP_OK;}
 esp_err_t httpd_resp_set_type(httpd_req_t *r,const char *t){(void)r;(void)t;return ESP_OK;}
@@ -29,8 +52,8 @@ static const char *header(httpd_req_t *r,const char *name){if(!strcmp(name,"X-Co
 esp_err_t httpd_req_get_hdr_value_str(httpd_req_t *r,const char *name,char *value,size_t size){const char *h=header(r,name);if(!h||strlen(h)>=size)return ESP_ERR_INVALID_ARG;strcpy(value,h);return ESP_OK;}
 size_t httpd_req_get_hdr_value_len(httpd_req_t *r,const char *name){const char *h=header(r,name);return h?strlen(h):0;}
 int httpd_req_recv(httpd_req_t *r,char *buffer,size_t size){size_t n=strlen(r->body)-r->offset;if(n>size)n=size;if(n>7)n=7;memcpy(buffer,r->body+r->offset,n);r->offset+=n;return n;}
-esp_err_t httpd_start(httpd_handle_t *h,const httpd_config_t *c){assert(c->if_name&&!strcmp(c->if_name->ifr_name,"ap0"));*h=(void *)1;return ESP_OK;}
-esp_err_t httpd_stop(httpd_handle_t h){(void)h;return ESP_OK;}
+esp_err_t httpd_start(httpd_handle_t *h,const httpd_config_t *c){http_starts++;assert(c->if_name&&!strcmp(c->if_name->ifr_name,"ap1")&&c->server_port==80&&c->max_open_sockets==4);if(http_start_error)return http_start_error;*h=(void *)1;return ESP_OK;}
+esp_err_t httpd_stop(httpd_handle_t h){assert(h);http_stops++;return ESP_OK;}
 esp_err_t httpd_register_uri_handler(httpd_handle_t h,const httpd_uri_t *r){(void)h;(void)r;return ESP_OK;}
 esp_err_t httpd_register_err_handler(httpd_handle_t h,int code,esp_err_t (*f)(httpd_req_t *,httpd_err_code_t)){(void)h;(void)code;(void)f;return ESP_OK;}
 /* Config persistence is separately covered; use no-op NVS to link validation. */
@@ -43,6 +66,14 @@ void nvs_close(nvs_handle_t h){(void)h;}
 static httpd_req_t request(const char *body){response[0]=location[0]=0;strcpy(response_status,"200 OK");return (httpd_req_t){.body=body,.content_len=body?(int)strlen(body):0,.token=session_token,.origin="http://192.168.4.1",.host="192.168.4.1"};}
 int main(void)
 {
+ /* AP is still being registered after esp_wifi_start() returns. */
+ ap_ready_at=60;assert(provision_server_start()==ESP_OK);assert(ticks==60&&http_starts==1&&server&&dns_socket==80);
+ assert(provision_server_start()==ESP_ERR_INVALID_STATE);provision_server_stop();assert(!server&&dns_socket==-1&&http_stops==1&&dns_closes==1);
+ ap_ready_at=ticks+AP_READY_MS+1;assert(provision_server_start()==ESP_ERR_TIMEOUT);assert(http_starts==1&&!server&&dns_socket==-1);
+ ap_ready_at=ticks;ap_missing=true;assert(provision_server_start()==ESP_ERR_INVALID_STATE);ap_missing=false;
+ http_start_error=ESP_FAIL;assert(provision_server_start()==ESP_FAIL&&!server);http_start_error=ESP_OK;
+ dns_bind_failed=true;assert(provision_server_start()==ESP_FAIL&&!server&&dns_socket==-1);dns_bind_failed=false;
+ assert(provision_server_start()==ESP_OK);provision_server_stop();
  strcpy(session_token,"test-token");device_config_defaults(&saved_config);strcpy(saved_config.ssid,"network");strcpy(saved_config.wifi_password,"wifi-secret");strcpy(saved_config.api_username,"user");strcpy(saved_config.api_password,"api-secret");
  httpd_req_t r=request(NULL);assert(config_get(&r)==ESP_OK);assert(!strstr(response,"wifi-secret")&&!strstr(response,"api-secret"));assert(strstr(response,"has_wifi_password"));
  const char *keep="{\"ssid\":\"new\",\"api_url\":\"https://example.org/api/account\",\"api_username\":\"new-user\",\"keep_wifi_password\":true,\"keep_api_password\":true}";
@@ -58,5 +89,5 @@ int main(void)
  scan_error=ESP_ERR_INVALID_STATE;r=request(NULL);scan_get(&r);assert(!strcmp(response_status,"503 Service Unavailable"));scan_error=ESP_OK;
  r=request(NULL);finish_post(&r);assert(!strcmp(response_status,"409 Conflict"));state.saved=true;r=request(NULL);finish_post(&r);assert(finish_calls==2&&!strcmp(response_status,"200 OK"));
  r=request(NULL);r.host="connectivitycheck.example";root_get(&r);assert(!strcmp(location,"http://192.168.4.1/"));
- puts("Web API password redaction/retention, validation, busy states, token/origin protection and captive redirect passed");return 0;
+ puts("AP readiness, HTTP/DNS startup cleanup, web API password redaction/retention, validation, busy states, token/origin protection and captive redirect passed");return 0;
 }

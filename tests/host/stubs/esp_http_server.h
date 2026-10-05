@@ -12,7 +12,7 @@ typedef void *httpd_handle_t;
 #define HTTPD_404_NOT_FOUND 404
 #define HTTPD_RESP_USE_STRLEN -1
 typedef struct { const char *uri; int method; esp_err_t (*handler)(httpd_req_t *); } httpd_uri_t;
-typedef struct { unsigned stack_size; bool lru_purge_enable; int recv_wait_timeout,send_wait_timeout; struct ifreq *if_name; } httpd_config_t;
+typedef struct { unsigned stack_size; uint16_t server_port; unsigned max_open_sockets; bool lru_purge_enable; int recv_wait_timeout,send_wait_timeout; struct ifreq *if_name; } httpd_config_t;
 #define HTTPD_DEFAULT_CONFIG() ((httpd_config_t){0})
 esp_err_t httpd_resp_send_err(httpd_req_t *req, int status, const char *message);
 esp_err_t httpd_resp_set_type(httpd_req_t *req,const char *type);

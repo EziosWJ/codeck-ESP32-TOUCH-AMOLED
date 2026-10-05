@@ -4,6 +4,9 @@
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_random.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "cJSON.h"
 #include "lwip/sockets.h"
 #include <net/if.h>
@@ -12,11 +15,32 @@
 #include <stdio.h>
 #include <string.h>
 
+#define AP_READY_MS 5000
+static const char *TAG = "provision_server";
+
 extern const char page_start[] asm("_binary_provision_html_start");
 static httpd_handle_t server;
 static int dns_socket = -1;
 static char session_token[33];
 static struct ifreq ap_interface;
+
+static esp_err_t get_ready_ap_interface(void)
+{
+    memset(&ap_interface, 0, sizeof(ap_interface));
+    esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (!ap) return ESP_ERR_INVALID_STATE;
+    /* Wi-Fi start is asynchronous. Before AP_START adds the AP to lwIP,
+     * its unassigned interface index can resolve to the STA interface. */
+    TickType_t start = xTaskGetTickCount();
+    while (!esp_netif_is_netif_up(ap)) {
+        if (xTaskGetTickCount() - start >= pdMS_TO_TICKS(AP_READY_MS)) {
+            ESP_LOGE(TAG, "Timed out waiting for the AP network interface");
+            return ESP_ERR_TIMEOUT;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    return esp_netif_get_netif_impl_name(ap, ap_interface.ifr_name);
+}
 
 static esp_err_t json_reply(httpd_req_t *req, cJSON *json)
 {
@@ -194,16 +218,21 @@ esp_err_t provision_server_start(void)
         (unsigned long)esp_random(), (unsigned long)esp_random());
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
+    config.server_port = 80;
+    /* Leave sockets for DNS, time synchronization and the API check. */
+    config.max_open_sockets = 4;
     config.lru_purge_enable = true;
     config.recv_wait_timeout = 5;
     config.send_wait_timeout = 5;
-    memset(&ap_interface, 0, sizeof(ap_interface));
-    esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-    esp_err_t err = esp_netif_get_netif_impl_name(ap, ap_interface.ifr_name);
+    esp_err_t err = get_ready_ap_interface();
     if (err != ESP_OK) return err;
+    if (!ap_interface.ifr_name[0]) return ESP_ERR_INVALID_STATE;
     config.if_name = &ap_interface;
     err = httpd_start(&server, &config);
-    if (err != ESP_OK) return err;
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "HTTP start failed: %s", esp_err_to_name(err));
+        return err;
+    }
     const httpd_uri_t routes[] = {
         {.uri = "/", .method = HTTP_GET, .handler = root_get},
         {.uri = "/api/config", .method = HTTP_GET, .handler = config_get},
@@ -223,6 +252,7 @@ esp_err_t provision_server_start(void)
         fcntl(dns_socket, F_SETFL, O_NONBLOCK) != 0) {
         provision_server_stop(); return ESP_FAIL;
     }
+    ESP_LOGI(TAG, "Provisioning HTTP ready on %s:%u", ap_interface.ifr_name, config.server_port);
     return ESP_OK;
 }
 
