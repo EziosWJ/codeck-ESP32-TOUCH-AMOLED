@@ -3,6 +3,125 @@
 ESP32-S3 / ESP-IDF 6.1 / LVGL 9.4。启动后连接 Wi-Fi，用 HTTP Basic Auth
 获取 `/api/account`，显示 Codex 主额度窗口，默认每 60 秒刷新。
 
+## 电脑模拟截图
+
+以下截图于 **2026-10-06** 重新编译并运行主机测试后生成，覆盖设备的全部五个页面。
+主机程序编译与固件共用的 `main/ui/ui_home.c`、`main/ui/ui_dashboard.c`、字体和
+触摸输入代码，由真实 LVGL 在 **466 × 466** 的虚拟显示屏上绘制；测试模拟滑动和
+点击，用 `lv_snapshot_take()` 导出 PPM，再无损转换为 PNG，保存在
+[`docs/screenshots/`](docs/screenshots/)。这是离屏模拟，不会弹出可手动操作的桌面窗口。
+
+### 五个页面
+
+截图按设备左右滑动的顺序排列，点击图片可查看原始尺寸。
+
+| 1. 首页 | 2. 额度详情 | 3. 成本统计 |
+| --- | --- | --- |
+| ![首页：78% 剩余额度、今日成本和任务数量](docs/screenshots/ui_home_reference.png) | ![额度详情：5 小时额度 78%、7 天额度 62%](docs/screenshots/ui_quota_details.png) | ![成本统计：今日成本、昨日变化、24 小时柱状图和 Tokens](docs/screenshots/ui_cost.png) |
+| 额度环、剩余小时数、重置倒计时，以及成本、今日任务、运行数量卡片。 | 同时查看主额度和周额度，显示各自的剩余比例与重置时间。 | 显示今日美元成本、较昨日变化、小时分布和用量统计。 |
+
+| 4. 联网状态 | 5. 网络设置 |
+| --- | --- |
+| ![联网状态：Wi-Fi 已连接、IP 地址、信号和服务状态](docs/screenshots/ui_network_online.png) | ![网络设置：已有配置，可重新配网](docs/screenshots/ui_settings_idle.png) |
+| 显示 Wi-Fi 名称、IPv4、信号强度、额度服务和时间同步状态；底部按钮返回首页。 | 查看配网状态，点击“重新配网”后先弹出确认框；配网期间可以完成或取消。 |
+
+**截图数据说明：** 百分比、时间、SSID、IP、热点密码、成本与任务数量均由测试注入，
+不是本次访问真实账户或网络得到的数据。首页的 `$0.42`、今日任务 `3`、运行中 `2`，
+以及成本页的 `-32%`、`12.4M`、`320K`、`1,842` 和小时柱状图仅用于展示界面。
+目前设备账号接口未映射成本、任务和运行数量，实际缺少数据时显示 `--` 或 `$--`。
+网络与配网由 SDK 替身驱动；屏幕上的 `Codeck-1234` 和 `a1b2c3d4e5f6` 是固定测试值，
+实际设备热点名与密码以设备屏幕为准。
+
+### 等待数据与异常状态
+
+<details>
+<summary>首页：等待数据、95%、100% 和额度用尽</summary>
+
+| 等待数据 | 剩余 95% |
+| --- | --- |
+| ![首页等待首次额度数据](docs/screenshots/ui_waiting.png) | ![首页剩余 95%](docs/screenshots/ui_95.png) |
+
+| 剩余 100% | 剩余 0%，请求失败 |
+| --- | --- |
+| ![首页剩余 100%](docs/screenshots/ui_100.png) | ![首页额度用尽且服务离线](docs/screenshots/ui_zero.png) |
+
+</details>
+
+<details>
+<summary>额度详情：周额度缺失、边界值和时间未同步</summary>
+
+| 周额度缺失 | 主额度 0%、周额度 100% | 时间未同步 |
+| --- | --- | --- |
+| ![有效主额度与缺失的周额度](docs/screenshots/ui_quota_details_missing_weekly.png) | ![两种额度的零值与满额边界](docs/screenshots/ui_quota_details_extremes.png) | ![额度详情时间未同步](docs/screenshots/ui_quota_details_unsynced.png) |
+
+</details>
+
+<details>
+<summary>成本统计：无数据、成本上涨、非法值和有效零值</summary>
+
+| 尚无成本数据 | 较昨日上涨 12% |
+| --- | --- |
+| ![成本统计等待数据](docs/screenshots/ui_cost_waiting.png) | ![成本较昨日上涨](docs/screenshots/ui_cost_increase.png) |
+
+| 非法数据显示占位符 | 有效零值显示 $0.00 |
+| --- | --- |
+| ![非法成本数据不显示为真实数值](docs/screenshots/ui_cost_invalid.png) | ![有效零成本与零用量](docs/screenshots/ui_cost_zero.png) |
+
+</details>
+
+<details>
+<summary>联网状态：已配置但断线、尚未配置</summary>
+
+| 已配置但断线 | 尚未配置 |
+| --- | --- |
+| ![断线后保留 Wi-Fi 名称，清空 IP 与信号](docs/screenshots/ui_network_offline.png) | ![尚未配置 Wi-Fi](docs/screenshots/ui_network_unconfigured.png) |
+
+</details>
+
+<details>
+<summary>网络设置：确认、首次配网、连接、保存及失败等状态</summary>
+
+| 重新配网确认框 | 等待手机配网 | 首次启动自动进入配网 |
+| --- | --- | --- |
+| ![重新配网前的确认弹窗](docs/screenshots/ui_settings_confirm.png) | ![配网热点与访问地址](docs/screenshots/ui_settings_waiting.png) | ![首次启动的配网界面](docs/screenshots/ui_settings_first_boot.png) |
+
+| 正在连接 Wi-Fi | 配置已保存，API 返回 401 | 正在关闭热点 |
+| --- | --- | --- |
+| ![正在连接 Wi-Fi](docs/screenshots/ui_settings_connecting.png) | ![联网成功但 API 认证失败，配置仍保留](docs/screenshots/ui_settings_api_error.png) | ![关闭热点期间禁用操作](docs/screenshots/ui_settings_stopping.png) |
+
+| Wi-Fi 连接超时 | 网络启动失败 |
+| --- | --- |
+| ![连接超时后提示检查密码和网络](docs/screenshots/ui_settings_failed.png) | ![网络启动失败后提示重启设备](docs/screenshots/ui_settings_startup_error.png) |
+
+</details>
+
+### 重新运行和生成截图
+
+先完成一次 `idf.py build` 下载 `managed_components`，然后在安装了 C 编译器、
+CMake 和 Python 3 的 Linux / WSL 终端进入项目根目录执行：
+
+```sh
+cmake -S tests/host -B build/host -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/host -j 8
+ctest --test-dir build/host --output-on-failure
+python3 tests/host/export_ui_screenshots.py
+```
+
+只需刷新截图时，构建后运行 UI 测试即可；必须从 `build/host` 运行，PPM 会写入当前目录：
+
+```sh
+(cd build/host && env -u CODECK_UI_HEAP_BYTES ./test_ui)
+python3 tests/host/export_ui_screenshots.py
+```
+
+[`export_ui_screenshots.py`](tests/host/export_ui_screenshots.py) 只使用 Python 标准库，
+将 26 张测试快照转换为 README 使用的 PNG，不需要安装图片处理库。
+Windows 也可以在 WSL 生成 PPM 后运行 `python tests/host/export_ui_screenshots.py`。
+设置 `CODECK_UI_HEAP_BYTES` 的设备堆预算测试会跳过截图，截图生成应使用普通 UI 测试。
+
+本次重新构建后主机测试全部通过；截图用于检查字体、布局、颜色和状态展示。
+真实 Wi-Fi、手机配网页面、HTTPS、屏幕驱动和触摸手感仍需按下文的实机验证步骤检查。
+
 ## 手机网页配置
 
 固件不再读取 `main/config.local.h` 中的 Wi-Fi 和 API 凭据。升级后没有本版本的

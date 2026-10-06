@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codeck 主机模拟与截图"
+  short_description: "运行真实 LVGL 主机测试，导出五个页面和关键状态截图并更新项目说明"
+  default_prompt: "使用 $codeck-host-screenshots 重新编译当前项目，模拟运行全部设备页面，导出截图并更新 README。"
